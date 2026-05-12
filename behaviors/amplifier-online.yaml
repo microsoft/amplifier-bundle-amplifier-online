@@ -1,0 +1,12 @@
+bundle:
+  name: amplifier-online-behavior
+  version: 1.0.0
+  description: Adds Amplifier Online deployment assistance — stacks, manifests, CLI guidance, troubleshooting, and CI/CD
+
+agents:
+  include:
+    - amplifier-online:deployment-guide
+
+context:
+  include:
+    - amplifier-online:context/amplifier-online-pointer.md
