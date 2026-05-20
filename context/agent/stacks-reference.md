@@ -1,8 +1,9 @@
 # Amplifier Online Stacks Reference
 
 A **stack** is a reusable deployment blueprint that combines Infrastructure as Code (Bicep
-templates), Azure resource provisioning, container orchestration, and default project
-templates. Each stack knows how to provision, deploy, and destroy a specific type of workload.
+templates), Azure resource provisioning logic, container orchestration or static hosting
+configuration, and default project templates. Each stack knows how to provision, deploy, and
+destroy a specific type of workload.
 
 **Key concept:** Stack vs Project
 - **Stack** = the blueprint (e.g., `web-app-aca`) — shared, owned by the platform team
@@ -14,24 +15,36 @@ templates. Each stack knows how to provision, deploy, and destroy a specific typ
 
 Match your application's architecture to a stack using these criteria:
 
-| Criteria | `web-app-aca` | `function-app` *(planned)* | `static-site` *(planned)* | `batch-job` *(planned)* |
-|----------|:---:|:---:|:---:|:---:|
-| Long-running HTTP service | ✅ | ❌ | ❌ | ❌ |
-| Event-driven / HTTP triggers | ✅ | ✅ | ❌ | ❌ |
-| Static files only | ✅ | ❌ | ✅ | ❌ |
-| Scheduled / batch processing | ❌ | ❌ | ❌ | ✅ |
-| Needs managed databases | ✅ | ⚠️ | ❌ | ⚠️ |
-| Containerized workload | ✅ | ❌ | ❌ | ✅ |
-| Entra ID auth (EasyAuth) | ✅ | ❌ | ❌ | ❌ |
+| Criteria | `web-app-aca` | `web-app-awa` | `static-web-app` |
+|----------|:---:|:---:|:---:|
+| Multi-container backend + frontend | ✅ | ❌ | ❌ |
+| Single backend container + static frontend | ❌ | ✅ | ❌ |
+| Pure static site (no backend) | ❌ | ❌ | ✅ |
+| Needs managed databases | ✅ | ✅ | ❌ |
+| Container-to-container networking | ✅ | ❌ | ❌ |
+| GitHub-integrated CI/CD for frontend | ⚠️ | ✅ | ✅ |
+| PR preview deployments | ⚠️ | ✅ | ✅ |
+| Entra ID auth (EasyAuth) | ✅ | ✅ | ✅ |
 
-**Currently available:** Only `web-app-aca` is live. Roadmap stacks (`function-app`,
-`static-site`, `batch-job`, `aks-app`) are planned but not yet available. Frame selection
-in architectural terms even when only one stack exists — this framing stays correct after
-roadmap stacks land.
+**All three stacks are production-ready and available now.**
 
 **How to see what's available:**
 ```bash
 amplifier-online stacks
+```
+
+Output:
+```
+Available deployment stacks:
+
+  web-app-aca
+    Azure Container Apps with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+
+  web-app-awa
+    Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+
+  static-web-app
+    Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
 ```
 
 ---
@@ -43,18 +56,20 @@ amplifier-online stacks
 ### What it provisions
 
 - **Container Apps Environment** — shared, managed by the Platform
-- **Frontend container app** — for React/Vue/static web (port 3000 or 80)
 - **Backend container app** — for API service (port 8000 or custom)
+- **Frontend container app** — for React/Vue/static web (port 80 or 3000)
 - **Optional: PostgreSQL** (flexible server, shared with other projects)
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
-- **Networking** — automatic DNS, TLS certificates, ingress rules
+- **Networking** — automatic DNS, TLS certificates, ingress rules, container-to-container communication
 - **Authentication** — EasyAuth with Entra ID (per-project app registration)
+- **Observability** — Application Insights (workspace-based)
 
 ### Best for
 
-- Full-stack web applications (frontend + backend API)
+- Full-stack web applications with both backend and frontend containers
+- Applications needing container-to-container networking
 - Applications needing managed databases
 - Internal tools with Entra ID / SSO authentication
 - Teams that want infrastructure fully managed
@@ -82,23 +97,108 @@ amplifier-online stacks
    running `amplifier-online up`. The CLI/service does not build images; it deploys whatever
    tag is in the manifest at the time of `up`. Use `az acr build` or Docker push directly.
 
+4. **Health endpoints exist** — each container MUST expose `/health` that returns 200 OK.
+
 ### Stack-specific manifest fields
 
 ```yaml
 name: my-project
 stack: web-app-aca       # ← must exactly match this string
 
-containers:
-  api:                   # ← container name becomes the Azure Container App name
-    image: amplifieronlinecr.azurecr.io/my-project-api:latest
-    port: 8000           # ← must match the port your API listens on
-  web:
-    image: amplifieronlinecr.azurecr.io/my-project-web:latest
-    port: 3000           # ← must match the port your web server listens on
+backend:
+  image: amplifieronlinecr.azurecr.io/my-project-api:latest
+  port: 8000             # ← must match the port your API listens on
+  env:
+    - name: LOG_LEVEL
+      value: info
+
+frontend:
+  type: container        # ← distinguishes from static-web-app type
+  image: amplifieronlinecr.azurecr.io/my-project-web:latest
+  port: 80               # ← must match the port your web server listens on
 
 resources:
   postgres:
     enabled: true        # ← provisions a database on the shared Postgres server
+    sku: B_Gen5_1        # ← optional: Basic tier (default)
+    storage_mb: 5120     # ← optional: 5 GB (default)
+  cosmos:
+    enabled: false
+    throughput: 400      # ← optional: RU/s (default)
+  redis:
+    enabled: false
+    sku: Basic           # ← optional: Basic tier (default)
+    capacity: 0          # ← optional: C0 (250 MB, default)
+  storage:
+    enabled: false
+    sku: Standard_LRS    # ← optional: Locally-redundant (default)
+```
+
+**Key differences from older manifest format:**
+- Uses `backend:` and `frontend:` instead of `containers:`
+- `frontend.type: container` explicitly declares it's containerized
+- Resource SKU configuration is now supported
+
+---
+
+## Stack: `web-app-awa`
+
+**Full name:** Azure Web App (backend) + Azure Static Web App (frontend)
+
+### What it provisions
+
+- **Backend:** Azure Web App running a Linux container
+- **Frontend:** Azure Static Web App with GitHub integration
+- **Optional: PostgreSQL** (flexible server, shared with other projects)
+- **Optional: Cosmos DB** (document database)
+- **Optional: Redis** (cache)
+- **Optional: ADLS Gen2 Storage** (blob/file storage)
+- **Authentication:** EasyAuth with Entra ID (per-project app registration)
+- **Observability:** Application Insights (workspace-based)
+
+### Best for
+
+- Applications where the frontend is a pure static site (React SPA, Vue, etc.)
+- Teams wanting built-in GitHub Actions CI/CD for the frontend
+- Apps that benefit from Static Web App's automatic PR preview deployments
+- Separation of backend (containerized) and frontend (static) deployment lifecycle
+
+### Repo prerequisites
+
+**Backend:**
+1. Dockerfile exists for backend container
+2. Image pushed to ACR
+3. Health endpoint at `/health` returns 200 OK
+
+**Frontend:**
+1. Code in GitHub repository (public or private)
+2. Build configuration (package.json with build script)
+3. Build output directory specified correctly
+
+### Stack-specific manifest fields
+
+```yaml
+name: my-project
+stack: web-app-awa       # ← must exactly match this string
+
+backend:
+  image: amplifieronlinecr.azurecr.io/my-project-api:latest
+  port: 8000
+  env:
+    - name: LOG_LEVEL
+      value: info
+
+frontend:
+  type: static-web-app   # ← distinguishes from container type
+  repo: https://github.com/your-org/your-repo  # ← GitHub repo URL
+  branch: main
+  app_location: "/"              # ← path to frontend in repo (e.g., "/frontend" for monorepo)
+  output_location: "dist"        # ← build output dir (must match vite/webpack config)
+  build_command: "npm run build" # ← optional, defaults to "npm run build"
+
+resources:
+  postgres:
+    enabled: true
   cosmos:
     enabled: false
   redis:
@@ -107,12 +207,111 @@ resources:
     enabled: false
 ```
 
-**Container naming conventions:**
-- `api` → backend API service
-- `web` → frontend / static server
+**Important:** `output_location` must match your actual build output:
+- Vite → `dist`
+- Webpack → `dist` or `build`
+- Next.js (static export) → `out`
+- Create React App → `build`
 
-You may use different names (e.g., `backend`, `frontend`), but `api` and `web` are the
-generated defaults from `amplifier-online init`.
+### Frontend ↔ Backend Communication
+
+Frontend calls backend via public URL. Backend MUST configure CORS to allow frontend origin:
+
+```python
+# FastAPI example
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://*.azurestaticapps.net",  # Production
+        "http://localhost:5173"            # Local dev
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+---
+
+## Stack: `static-web-app`
+
+**Full name:** Azure Static Web App (pure static hosting)
+
+### What it provisions
+
+- **Frontend:** Azure Static Web App with GitHub integration
+- **Optional serverless API:** Azure Functions (if `api_location` specified)
+- **Authentication:** EasyAuth with Entra ID (per-project app registration)
+- **No databases:** This stack does not support PostgreSQL, Cosmos, Redis, or Storage
+
+### Best for
+
+- Pure static sites (HTML/CSS/JS, React SPA, Vue SPA)
+- Documentation sites
+- Portfolios and landing pages
+- Applications with NO backend needs
+- Teams wanting automatic PR preview deployments
+
+### What this stack does NOT support
+
+❌ Server-Side Rendering (SSR)
+❌ Backend APIs (except optional serverless functions)
+❌ Database access
+❌ Server-side logic
+
+**Need backend or SSR?** Use `web-app-aca` or `web-app-awa` instead.
+
+### Repo prerequisites
+
+1. Code in GitHub repository (public or private)
+2. Build configuration (if using a framework with build step)
+3. Build output directory specified correctly
+
+### Stack-specific manifest fields
+
+```yaml
+name: my-static-site
+stack: static-web-app    # ← must exactly match this string
+
+frontend:
+  type: static-web-app   # ← required for this stack
+  repo: https://github.com/your-org/your-repo
+  branch: main
+  app_location: "/"              # ← path to source in repo
+  output_location: "dist"        # ← build output directory
+  build_command: "npm run build" # ← optional, defaults to "npm run build"
+  api_location: "api"            # ← optional: serverless functions directory
+```
+
+### Optional Serverless API Functions
+
+You can add serverless functions alongside your static site:
+
+**Add an `api/` directory:**
+```javascript
+// api/hello.js
+module.exports = async function (context, req) {
+  return {
+    body: { message: 'Hello from API' }
+  };
+};
+```
+
+**Call from frontend:**
+```javascript
+const response = await fetch('/api/hello');
+const data = await response.json();
+```
+
+**Update manifest:**
+```yaml
+frontend:
+  app_location: "/"
+  api_location: "api"      # ← Add this for API functions
+  output_location: "dist"
+```
 
 ---
 
@@ -124,7 +323,6 @@ will not list them and `amplifier-online up` will fail with an unknown stack err
 | Stack | Description | Expected use case |
 |-------|-------------|-------------------|
 | `function-app` | Azure Functions with HTTP triggers | Event-driven, serverless APIs |
-| `static-site` | Static web hosting with Azure CDN | React/Next.js static exports, documentation |
 | `batch-job` | Azure Container Instances for scheduled jobs | ETL, nightly reports, data pipelines |
 | `aks-app` | Kubernetes deployment on AKS | Complex microservices, custom networking |
 
@@ -137,7 +335,7 @@ Azure resources, and there is no migration path between stacks.
 
 ```bash
 amplifier-online destroy          # 1. Tear down current stack resources
-# Edit amplifier-online.yaml      # 2. Change the stack: field and adjust containers/resources
+# Edit amplifier-online.yaml      # 2. Change the stack: field and adjust backend/frontend/resources
 amplifier-online up               # 3. Deploy with the new stack
 ```
 
@@ -147,7 +345,7 @@ amplifier-online up               # 3. Deploy with the new stack
 
 ## Multiple Projects, Same Stack
 
-Many projects can run on `web-app-aca` simultaneously. Each project gets isolated Azure
-resources — its own container apps, its own Entra app registration, its own database
+Many projects can run on the same stack simultaneously. Each project gets isolated Azure
+resources — its own container apps or web apps, its own Entra app registration, its own database
 (when enabled). The shared infrastructure (Container Apps Environment, ACR, Postgres server)
 is shared at the infrastructure level, but project data is isolated.

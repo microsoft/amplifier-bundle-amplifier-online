@@ -11,24 +11,48 @@ then edited by the developer.
 ```yaml
 # Required fields
 name: <project-name>          # Unique project identifier (URL-safe, lowercase, hyphens)
-stack: <stack-name>           # Which stack to deploy with (e.g., web-app-aca)
+stack: <stack-name>           # Which stack to deploy with (web-app-aca, web-app-awa, or static-web-app)
 
-# Required: containers section (at least one container)
-containers:
-  <container-name>:           # Logical name; becomes the Azure Container App name suffix
-    image: <acr-image>        # MUST be ACR format — see image format rules below
-    port: <port-number>       # Port your application listens on (integer)
+# Backend configuration (required for web-app-aca and web-app-awa)
+backend:
+  image: <acr-image>          # ACR image URI (required for container-based stacks)
+  port: <port-number>         # Port your backend listens on (integer)
+  env:                        # Optional environment variables
+    - name: <env-var-name>
+      value: <env-var-value>
+
+# Frontend configuration (required for all stacks)
+frontend:
+  type: <container|static-web-app>  # Type of frontend deployment
+  
+  # For type: container (web-app-aca only)
+  image: <acr-image>          # ACR image URI
+  port: <port-number>         # Port your frontend listens on (integer)
+  
+  # For type: static-web-app (web-app-awa and static-web-app)
+  repo: <github-url>          # GitHub repository URL
+  branch: <branch-name>       # Branch to deploy from (default: main)
+  app_location: <path>        # Path to app source in repo (default: /)
+  output_location: <path>     # Build output directory (e.g., dist, build, out)
+  build_command: <command>    # Optional build command (default: npm run build)
+  api_location: <path>        # Optional serverless API directory (static-web-app only)
 
 # Optional: resource flags (defaults to all disabled)
 resources:
   postgres:
     enabled: <bool>           # Provision a Postgres database for this project
+    sku: <sku-name>           # Optional: SKU tier (default: B_Gen5_1)
+    storage_mb: <integer>     # Optional: Storage in MB (default: 5120)
   cosmos:
     enabled: <bool>           # Provision a Cosmos DB (document store)
+    throughput: <integer>     # Optional: RU/s (default: 400)
   redis:
     enabled: <bool>           # Provision a Redis cache
+    sku: <sku-name>           # Optional: SKU tier (default: Basic)
+    capacity: <integer>       # Optional: Capacity (default: 0 for C0)
   storage:
     enabled: <bool>           # Provision ADLS Gen2 storage
+    sku: <sku-name>           # Optional: SKU tier (default: Standard_LRS)
 ```
 
 ---
@@ -43,17 +67,34 @@ resources:
 
 ### `stack`
 - **Required.** Must exactly match a stack name returned by `amplifier-online stacks`.
-- Current valid value: `web-app-aca`
+- Current valid values: `web-app-aca`, `web-app-awa`, `static-web-app`
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
-### `containers`
-- **Required.** At least one container must be defined.
-- Container names become part of the Azure Container App name: `<project-name>-<container-name>`
-- Each container MUST have `image` and `port`.
+### `backend`
+- **Required for:** `web-app-aca`, `web-app-awa`
+- **Not used for:** `static-web-app`
+- Must have `image` and `port` fields
+- `image` must reference ACR in format: `<acr-name>.azurecr.io/<project>-<service>:<tag>`
+- `env` is optional for additional environment variables
 
-### `image` — ACR Format (Critical)
+### `frontend`
+- **Required for all stacks.**
+- Must have `type` field declaring either `container` or `static-web-app`
 
-All images MUST reference the shared Azure Container Registry:
+**For `type: container` (web-app-aca only):**
+- Must have `image` and `port` fields
+- Image must be in ACR format
+- Port must match what your frontend container listens on
+
+**For `type: static-web-app` (web-app-awa and static-web-app):**
+- Must have `repo`, `branch`, `app_location`, and `output_location`
+- `repo` must be a valid GitHub repository URL
+- `build_command` defaults to `npm run build` if omitted
+- `api_location` is optional (only for serverless functions in static-web-app)
+
+### `backend.image` and `frontend.image` — ACR Format (Critical)
+
+All container images MUST reference the shared Azure Container Registry:
 
 ```
 <acr-name>.azurecr.io/<project-name>-<service>:<tag>
@@ -72,7 +113,8 @@ Images must be pushed to ACR BEFORE running `amplifier-online up`. The service d
 build images — it deploys whatever tag is currently in the registry.
 
 ### `port`
-- **Required.** Integer matching the port your application ACTUALLY listens on.
+- **Required for containerized frontends and all backends.**
+- Integer matching the port your application ACTUALLY listens on.
 - Common ports:
   - FastAPI / uvicorn: `8000`
   - Flask / Gunicorn: `5000`
@@ -81,29 +123,120 @@ build images — it deploys whatever tag is currently in the registry.
   - Nginx (static): `80`
 - ❌ Wrong port is a common failure mode: app runs but health checks fail
 
+### `frontend.output_location`
+- **Required for static-web-app frontend types.**
+- Must match your build tool's actual output directory:
+  - Vite → `dist`
+  - Webpack → `dist` or `build`
+  - Next.js (static export) → `out`
+  - Create React App → `build`
+- ❌ Common mistake: `src` (source directory, not build output)
+
 ### `resources`
 - **Optional** (all disabled by default).
+- **Not supported for:** `static-web-app` stack
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
 - **postgres**: Adds a database and user on the shared PostgreSQL server; connection string
-  injected as an environment variable
-- **cosmos**: Creates a Cosmos DB database/container; connection string injected
-- **redis**: Provisions a Redis cache instance
-- **storage**: Provisions ADLS Gen2 blob storage; credentials injected
+  injected as `DATABASE_URL` environment variable
+- **cosmos**: Creates a Cosmos DB database/container; connection string injected as `COSMOS_CONNECTION_STRING`
+- **redis**: Provisions a Redis cache instance; connection injected as `REDIS_CONNECTION_STRING`
+- **storage**: Provisions ADLS Gen2 blob storage; credentials injected as `STORAGE_ACCOUNT_NAME` and `STORAGE_ACCOUNT_KEY`
 
 ---
 
 ## Worked Examples
 
-### Minimal: API only
+### Stack: web-app-aca (multi-container)
+
+```yaml
+name: my-project
+stack: web-app-aca
+
+backend:
+  image: amplifieronlinecr.azurecr.io/my-project-api:latest
+  port: 8000
+  env:
+    - name: LOG_LEVEL
+      value: info
+
+frontend:
+  type: container
+  image: amplifieronlinecr.azurecr.io/my-project-web:latest
+  port: 80
+
+resources:
+  postgres:
+    enabled: true
+    sku: B_Gen5_1        # Basic tier
+    storage_mb: 5120     # 5 GB
+  cosmos:
+    enabled: true
+    throughput: 400      # 400 RU/s
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+```
+
+### Stack: web-app-awa (container backend + static frontend)
+
+```yaml
+name: my-project
+stack: web-app-awa
+
+backend:
+  image: amplifieronlinecr.azurecr.io/my-project-api:latest
+  port: 8000
+
+frontend:
+  type: static-web-app
+  repo: https://github.com/my-org/my-repo
+  branch: main
+  app_location: "/"
+  output_location: "dist"
+  build_command: "npm run build"
+
+resources:
+  postgres:
+    enabled: true
+  cosmos:
+    enabled: false
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+```
+
+### Stack: static-web-app (pure static site)
+
+```yaml
+name: my-static-site
+stack: static-web-app
+
+frontend:
+  type: static-web-app
+  repo: https://github.com/my-org/my-repo
+  branch: main
+  app_location: "/"
+  output_location: "dist"
+  build_command: "npm run build"
+  api_location: "api"    # Optional: for serverless functions
+
+# No backend section for static-web-app
+# No resources section — static-web-app doesn't support databases
+```
+
+### Minimal: API only (web-app-aca with backend only)
 
 ```yaml
 name: my-api
 stack: web-app-aca
 
-containers:
-  api:
-    image: amplifieronlinecr.azurecr.io/my-api-api:latest
-    port: 8000
+backend:
+  image: amplifieronlinecr.azurecr.io/my-api:latest
+  port: 8000
+
+# No frontend section — backend-only deployment
 
 resources:
   postgres:
@@ -113,52 +246,6 @@ resources:
   redis:
     enabled: false
   storage:
-    enabled: false
-```
-
-### Full-stack: Frontend + backend + database
-
-```yaml
-name: lakehouse
-stack: web-app-aca
-
-containers:
-  api:
-    image: amplifieronlinecr.azurecr.io/lakehouse-api:latest
-    port: 8000
-  web:
-    image: amplifieronlinecr.azurecr.io/lakehouse-web:latest
-    port: 3000
-
-resources:
-  postgres:
-    enabled: true    # Need relational DB
-  cosmos:
-    enabled: true    # Need document store
-  redis:
-    enabled: false
-  storage:
-    enabled: false
-```
-
-### Hello world (no databases)
-
-```yaml
-name: hello-world
-stack: web-app-aca
-
-containers:
-  api:
-    image: amplifieronlinecr.azurecr.io/hello-world-api:latest
-    port: 8000
-  web:
-    image: amplifieronlinecr.azurecr.io/hello-world-web:latest
-    port: 3000
-
-resources:
-  postgres:
-    enabled: false
-  cosmos:
     enabled: false
 ```
 
@@ -170,11 +257,32 @@ resources:
 
 | Requirement | Rule |
 |-------------|------|
-| Containers | 1–2 containers (`api`, `web`, or custom names) |
-| Images | Must be in ACR — `<acr-name>.azurecr.io/...` |
-| Ports | Must match application's actual listening port |
-| Dockerfiles | Must exist for each container (not part of manifest, but prerequisite for building) |
+| Backend | Required: `image`, `port` |
+| Frontend | Optional: `type: container`, `image`, `port` |
+| Resources | Supports: postgres, cosmos, redis, storage |
+| Dockerfiles | Must exist for each container (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
+| Health endpoints | Each container must expose `/health` → 200 OK |
+
+### `web-app-awa`
+
+| Requirement | Rule |
+|-------------|------|
+| Backend | Required: `image`, `port` |
+| Frontend | Required: `type: static-web-app`, `repo`, `branch`, `app_location`, `output_location` |
+| Resources | Supports: postgres, cosmos, redis, storage |
+| GitHub repo | Frontend code must be in GitHub |
+| CORS | Backend must allow frontend origin |
+
+### `static-web-app`
+
+| Requirement | Rule |
+|-------------|------|
+| Backend | Not supported — no backend section |
+| Frontend | Required: `type: static-web-app`, `repo`, `branch`, `app_location`, `output_location` |
+| Resources | Not supported — no resources section |
+| GitHub repo | Frontend code must be in GitHub |
+| Serverless API | Optional via `api_location` field |
 
 ---
 
@@ -186,6 +294,9 @@ Before running `amplifier-online up`, verify:
 - [ ] `stack` exactly matches output of `amplifier-online stacks`
 - [ ] All `image:` values use ACR format (`<acr>.azurecr.io/...`)
 - [ ] All `port:` values match what the application listens on
-- [ ] Images have been built and pushed to ACR
+- [ ] For containerized deployments: images have been built and pushed to ACR
+- [ ] For containerized deployments: each container has `/health` endpoint
+- [ ] For static-web-app frontends: `output_location` matches build tool output directory
+- [ ] For static-web-app frontends: GitHub repo URL is correct and accessible
 - [ ] Resource flags (`enabled: true/false`) are intentional
 - [ ] Global config (`~/.amplifier-online/config.yaml`) matches the target environment's `acr_name`
