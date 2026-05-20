@@ -286,6 +286,151 @@ resources:
 
 ---
 
+---
+
+## Auto-Injected Environment Variables
+
+When your containers deploy, Amplifier Online **automatically injects environment variables** based
+on the resources you enable. These are available to your application code without needing to
+declare them in `backend.env` or `frontend.env`.
+
+### Always Injected (All Stacks)
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend authentication |
+| `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | string | Application Insights connection string | Telemetry, logging, metrics |
+
+### Injected When `postgres.enabled: true`
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `DATABASE_URL` | string | Full PostgreSQL connection string | Direct database connection |
+| `DATABASE_HOST` | string | Postgres server FQDN | |
+| `DATABASE_PORT` | string | Port (default: `5432`) | |
+| `DATABASE_NAME` | string | Database name (same as project name) | |
+| `DATABASE_USER` | string | Admin username from global config | |
+| `DATABASE_PASSWORD` | string | Retrieved from Key Vault | |
+
+**Example usage (Python with asyncpg):**
+```python
+import os
+import asyncpg
+
+# Option 1: Use the full connection string
+DATABASE_URL = os.environ["DATABASE_URL"]
+conn = await asyncpg.connect(DATABASE_URL)
+
+# Option 2: Build connection from parts
+conn = await asyncpg.connect(
+    host=os.environ["DATABASE_HOST"],
+    port=os.environ["DATABASE_PORT"],
+    database=os.environ["DATABASE_NAME"],
+    user=os.environ["DATABASE_USER"],
+    password=os.environ["DATABASE_PASSWORD"],
+)
+```
+
+### Injected When `cosmos.enabled: true`
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `COSMOS_CONNECTION_STRING` | string | Full Cosmos DB connection string | Document database access |
+| `COSMOS_ENDPOINT` | string | Cosmos DB endpoint URL | |
+| `COSMOS_KEY` | string | Primary key from Key Vault | |
+| `COSMOS_DATABASE_NAME` | string | Database name (same as project name) | |
+
+**Example usage (Python with azure-cosmos):**
+```python
+import os
+from azure.cosmos import CosmosClient
+
+# Option 1: Connection string
+client = CosmosClient.from_connection_string(os.environ["COSMOS_CONNECTION_STRING"])
+
+# Option 2: Endpoint + key
+client = CosmosClient(
+    url=os.environ["COSMOS_ENDPOINT"],
+    credential=os.environ["COSMOS_KEY"]
+)
+database = client.get_database_client(os.environ["COSMOS_DATABASE_NAME"])
+```
+
+### Injected When `redis.enabled: true`
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `REDIS_CONNECTION_STRING` | string | Full Redis connection string | Cache access |
+| `REDIS_HOST` | string | Redis server FQDN | |
+| `REDIS_PORT` | string | Port (default: `6380` for SSL) | |
+| `REDIS_PASSWORD` | string | Access key from Key Vault | |
+
+**Example usage (Python with redis):**
+```python
+import os
+import redis
+
+# Option 1: Connection string
+r = redis.from_url(os.environ["REDIS_CONNECTION_STRING"])
+
+# Option 2: Build connection
+r = redis.Redis(
+    host=os.environ["REDIS_HOST"],
+    port=int(os.environ["REDIS_PORT"]),
+    password=os.environ["REDIS_PASSWORD"],
+    ssl=True
+)
+```
+
+### Injected When `storage.enabled: true`
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `STORAGE_ACCOUNT_NAME` | string | Storage account name | Blob/file/table/queue access |
+| `STORAGE_CONNECTION_STRING` | string | Full connection string | SDK initialization |
+| `STORAGE_ACCOUNT_KEY` | string | Primary key from Key Vault | |
+
+**Example usage (Python with azure-storage-blob):**
+```python
+import os
+from azure.storage.blob import BlobServiceClient
+
+# Option 1: Connection string
+blob_service = BlobServiceClient.from_connection_string(
+    os.environ["STORAGE_CONNECTION_STRING"]
+)
+
+# Option 2: Account name + key
+blob_service = BlobServiceClient(
+    account_url=f"https://{os.environ['STORAGE_ACCOUNT_NAME']}.blob.core.windows.net",
+    credential=os.environ["STORAGE_ACCOUNT_KEY"]
+)
+```
+
+### Custom Environment Variables
+
+If you need **additional** environment variables beyond the auto-injected ones, declare them in
+the manifest:
+
+```yaml
+backend:
+  image: amplifieronlinecr.azurecr.io/my-api:latest
+  port: 8000
+  env:
+    - name: MY_CUSTOM_VAR
+      value: "some-value"
+    - name: FEATURE_FLAG_X
+      value: "true"
+```
+
+**Rules:**
+- Custom env vars are merged with auto-injected vars
+- Auto-injected vars take precedence (you cannot override `DATABASE_URL`, `AUTH_CLIENT_ID`, etc.)
+- Use custom env vars for feature flags, API keys, non-resource config
+
+---
+
 ## Manifest Validation Checklist
 
 Before running `amplifier-online up`, verify:

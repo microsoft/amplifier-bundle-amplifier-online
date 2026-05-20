@@ -276,3 +276,128 @@ az acr repository list --name amplifieronlinecr                          # List 
 az acr repository show-tags --name amplifieronlinecr --repository <name>  # List image tags
 cat ~/.amplifier-online/config.yaml                                       # Show global config
 ```
+
+---
+
+## Failure Mode 9: Nested Entra Group Membership
+
+**Symptom:** User can log in successfully but gets access denied (403) when trying to access the app:
+```
+HTTP 403 - Forbidden
+User is authenticated but not authorized
+```
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container api    # Look for "user not in authorized group" errors
+# Check if the user is in a nested group (group-within-a-group)
+```
+
+**Root cause:** Azure Container Apps EasyAuth does not support **nested group membership**.
+If a user is in GroupB, and GroupB is a member of GroupA, and the manifest lists GroupA as
+the allowed group, EasyAuth will NOT recognize the user as authorized. Only direct membership works.
+
+**Fix:**
+1. Verify group membership structure:
+   - Azure Portal → Entra ID → Groups → [your admin_group or user_group]
+   - Check "Members" tab
+   - If the user is not directly listed, they're in a nested group
+
+2. **Option A (Recommended):** Add the user directly to the authorized group
+   - Azure Portal → Entra ID → Groups → [group] → Add member
+
+3. **Option B:** Change the manifest to use a different group that contains direct members
+   ```yaml
+   resources:
+     entra:
+       admin_group: <object-id-of-flat-group>
+       user_group: <object-id-of-flat-group>
+   ```
+
+4. Re-run `amplifier-online up` to update EasyAuth configuration
+
+**Note:** This is an Azure platform limitation, not an Amplifier Online bug. Nested groups do
+not work with Container Apps EasyAuth or Static Web Apps authentication.
+
+---
+
+## Failure Mode 10: Health Endpoint Returns 401 (EasyAuth Blocks It)
+
+**Symptom:** Deployment completes but Container App shows unhealthy, or Azure health probes fail:
+```
+Health probe failed: GET /health returned 401 Unauthorized
+Container app revision failing: health check timeout
+amplifier-online status shows: Revision: Failed
+```
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container api    # Look for repeated GET /health requests
+amplifier-online status                  # Check revision status
+curl https://<app-url>/health            # Test from outside (will also 401 if EasyAuth enabled)
+```
+
+**Root cause:** EasyAuth is enabled globally on the Container App, which means **ALL endpoints**
+require authentication by default, including health check endpoints. Azure's health probe doesn't
+send auth tokens, so it gets a 401 and marks the container as unhealthy.
+
+**Fix:**
+
+**Option 1 (Recommended):** Exclude `/health` from EasyAuth requirements
+
+Modify your backend to allow unauthenticated access to health endpoints:
+
+For **FastAPI** (using EasyAuth headers):
+```python
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.get("/health")
+def health():
+    # Health endpoint is always accessible (no auth check)
+    return {"status": "healthy"}
+
+@app.get("/api/protected")
+def protected_route(request: Request):
+    # Protected routes check for EasyAuth headers
+    user_id = request.headers.get("x-ms-client-principal-id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"user": user_id}
+```
+
+For **Express** (using EasyAuth headers):
+```javascript
+app.get('/health', (req, res) => {
+  // Health endpoint - no auth check
+  res.json({ status: 'healthy' });
+});
+
+app.get('/api/protected', (req, res) => {
+  // Protected routes check for EasyAuth headers
+  const userId = req.headers['x-ms-client-principal-id'];
+  if (!userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  res.json({ user: userId });
+});
+```
+
+**Option 2:** Use a different health check path that doesn't require external probes
+
+If your app must authenticate ALL endpoints, configure Container Apps to use:
+- Startup probe on an internal endpoint (container-internal only)
+- Or rely on process health instead of HTTP health checks
+
+**Key insight:** EasyAuth injects authentication headers (`x-ms-client-principal-*`) for
+authenticated requests. Your app should check for these headers on protected routes, but
+leave health/readiness endpoints unauthenticated so Azure's infrastructure can probe them.
+
+**After fixing:**
+1. Rebuild and push the updated container image
+2. Re-run `amplifier-online up`
+3. Verify with `amplifier-online status` — revision should show "Running"
+
+---
+

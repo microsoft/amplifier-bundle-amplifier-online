@@ -9,6 +9,42 @@ uv tool install git+https://github.com/payneio/amplifier-online#subdirectory=cli
 
 ---
 
+## Authentication
+
+The Amplifier Online CLI uses Azure credential chaining to authenticate. When you run commands
+that require Azure access, the CLI automatically tries multiple credential methods:
+
+1. **InteractiveBrowserCredential** (default) — Opens your browser for Azure login
+2. **AzureCliCredential** — Uses `az login` session if available
+
+**No explicit `az login` required** — the CLI will prompt for browser authentication when needed.
+
+### First-time authentication
+
+Run any command that requires Azure access (like `amplifier-online stacks`) and the CLI will
+guide you through browser authentication:
+
+```bash
+amplifier-online stacks
+# → Browser opens for Azure login (if not already authenticated)
+```
+
+### Microsoft tenant device code limitation
+
+If you're in a Microsoft-managed tenant, the device code flow may be blocked for security
+reasons. The CLI uses browser-based authentication by default, which avoids this issue.
+
+### Manual authentication (optional)
+
+If you prefer to use `az login`:
+
+```bash
+az login
+amplifier-online stacks  # Will use existing az login session
+```
+
+---
+
 ## `amplifier-online config`
 
 Create or update the global config file at `~/.amplifier-online/config.yaml`. Prompts for
@@ -75,6 +111,8 @@ amplifier-online init --stack web-app-aca  # Non-interactive: specify stack dire
 
 **After `init`:** Edit `amplifier-online.yaml` to set correct image names, ports, and resource flags.
 
+**Use `--stack` flag in scripts** — the interactive prompt is intended for manual use, not CI/CD.
+
 ---
 
 ## `amplifier-online up`
@@ -92,7 +130,7 @@ amplifier-online up --dry-run  # Preview what would happen without making change
 **Prerequisites:**
 - Global config exists (`amplifier-online config`)
 - `amplifier-online.yaml` present in current directory
-- Docker images already built and pushed to ACR
+- Docker images already built and pushed to ACR (for container stacks)
 - Images in manifest reference ACR (`<acr-name>.azurecr.io/...` format)
 
 **Always suggest `--dry-run` first** when a user is about to run `up` for the first time.
@@ -147,9 +185,9 @@ amplifier-online cicd create            # Write workflow files
 amplifier-online cicd create --dry-run  # Preview without writing
 ```
 
-**Generated files (for `web-app-aca`):**
-- `.github/workflows/<project>-api-build-deploy.yaml`
-- `.github/workflows/<project>-web-build-deploy.yaml`
+**Generated files (example for `web-app-aca` with 2 containers):**
+- `.github/workflows/api-build-deploy.yaml`
+- `.github/workflows/web-build-deploy.yaml`
 
 **Required GitHub secrets (must be set after generating):**
 - `AZURE_CLIENT_ID`
@@ -165,7 +203,8 @@ See cicd-guide.md for the full workflow shape and secret setup instructions.
 ### First deployment
 ```bash
 amplifier-online config           # 1. Set global config (once)
-# Build and push images to ACR    # 2. Build and push (outside CLI)
+# Browser auth happens automatically when needed
+# Build and push images to ACR    # 2. Build and push (outside CLI, for container stacks)
 amplifier-online init             # 3. Scaffold manifest
 # Edit amplifier-online.yaml      # 4. Set images/ports/resources
 amplifier-online up --dry-run     # 5. Preview
@@ -175,7 +214,7 @@ amplifier-online status           # 7. Check
 
 ### Subsequent deployments
 ```bash
-# Rebuild and push image to ACR
+# Rebuild and push image to ACR (for container stacks)
 amplifier-online up               # Re-deploy (idempotent)
 ```
 

@@ -23,7 +23,7 @@ meta:
     web-app-awa, static-web-app, Azure Container Apps, Azure Web Apps, Azure Static Web Apps,
     EasyAuth, MSAL.js authentication, ACR, container deployment, `amplifier-online up`,
     `amplifier-online init`, `amplifier-online config`, `amplifier-online cicd`, frontend
-    authentication with Entra ID, group-based authorization, SSO silent pattern
+    authentication with Entra ID, group-based authorization, SSO silent pattern, project analysis
 
     **MUST be used for:**
     - Any question about deploying via Amplifier Online
@@ -85,6 +85,15 @@ meta:
     acquisition, and group-based authorization. deployment-guide owns msal-authentication-guide.md.
     </commentary>
     </example>
+
+    <example>
+    user: 'Help me deploy this app to Amplifier Online' or 'Walk me through deployment'
+    assistant: "I'll use the deploy-project recipe for guided end-to-end deployment."
+    <commentary>
+    Guided deployment workflow with approval gates is handled by the deploy-project recipe.
+    deployment-guide provides the domain knowledge at each stage via recipe instructions.
+    </commentary>
+    </example>
 ---
 
 # Deployment Guide
@@ -140,6 +149,10 @@ of 12 turns, then summarize open questions and return.
 9. **Return focused answers.** Pull only the relevant section from the loaded context for the
    current workflow — don't dump the full playbook when a single section answers the question.
 
+10. **Guided deployment recipe awareness.** The `deploy-project` recipe orchestrates the full
+    deployment journey (analysis → stack selection → environment setup → deployment → CI/CD).
+    When recipe context indicates you're in a specific stage, follow that stage's instructions.
+
 ## Workflow: Repo Readiness Check (Scenario F)
 
 When the user asks "Is my repo ready for [stack]?" or you need to verify prerequisites before
@@ -173,6 +186,8 @@ Repo readiness check for web-app-aca:
 ## Knowledge Base
 
 @amplifier-online:context/agent/cli-reference.md
+
+@amplifier-online:context/agent/project-analysis.md
 
 @amplifier-online:context/agent/stacks-reference.md
 
