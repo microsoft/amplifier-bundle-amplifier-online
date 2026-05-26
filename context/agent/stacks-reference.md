@@ -30,7 +30,7 @@ Match your application's architecture to a stack using these criteria:
 
 **How to see what's available:**
 ```bash
-amplifier-online stacks
+amplifier-online stack list
 ```
 
 Output:
@@ -317,7 +317,7 @@ frontend:
 
 ## Roadmap Stacks (Not Yet Available)
 
-These are planned but not yet implemented. Do not attempt to use them — `amplifier-online stacks`
+These are planned but not yet implemented. Do not attempt to use them — `amplifier-online stack list`
 will not list them and `amplifier-online up` will fail with an unknown stack error.
 
 | Stack | Description | Expected use case |

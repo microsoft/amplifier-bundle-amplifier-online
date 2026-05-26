@@ -21,11 +21,11 @@ that require Azure access, the CLI automatically tries multiple credential metho
 
 ### First-time authentication
 
-Run any command that requires Azure access (like `amplifier-online stacks`) and the CLI will
+Run any command that requires Azure access (like `amplifier-online stack list`) and the CLI will
 guide you through browser authentication:
 
 ```bash
-amplifier-online stacks
+amplifier-online stack list
 # → Browser opens for Azure login (if not already authenticated)
 ```
 
@@ -40,7 +40,7 @@ If you prefer to use `az login`:
 
 ```bash
 az login
-amplifier-online stacks  # Will use existing az login session
+amplifier-online stack list  # Will use existing az login session
 ```
 
 ---
@@ -75,12 +75,12 @@ service_url: https://<provisioner-fqdn>
 
 ---
 
-## `amplifier-online stacks`
+## `amplifier-online stack list`
 
 List all deployment stacks available from the Amplifier Provisioner Service.
 
 ```bash
-amplifier-online stacks
+amplifier-online stack list
 ```
 
 **Example output:**
@@ -88,8 +88,29 @@ amplifier-online stacks
 Available deployment stacks:
 
   web-app-aca
-    Web application with Azure Container Apps, optional Postgres/Cosmos
+    Azure Container Apps with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+
+  web-app-awa
+    Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+
+  static-web-app
+    Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
 ```
+
+---
+
+## `amplifier-online stack manifest`
+
+Print the default YAML manifest template for a stack. Useful for previewing what
+`amplifier-online init` would generate without writing any files.
+
+```bash
+amplifier-online stack manifest <stack-name>                     # Show template with placeholder values
+amplifier-online stack manifest <stack-name> --project-name foo  # Show template with custom project name
+```
+
+If an `amplifier-online.yaml` exists in the current directory, the project name from it is used
+for template substitution. Otherwise, placeholder values are shown.
 
 ---
 

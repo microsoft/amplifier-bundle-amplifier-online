@@ -111,8 +111,8 @@ stages:
       
       CHECK 3: Azure authentication
         The CLI supports multiple credential types (InteractiveBrowserCredential, AzureCliCredential, etc.)
-        Try: amplifier-online stacks (this will test auth)
-        ❌ If auth fails → Guide: "The CLI will prompt for browser login if needed. Run: amplifier-online stacks"
+        Try: amplifier-online stack list (this will test auth)
+        ❌ If auth fails → Guide: "The CLI will prompt for browser login if needed. Run: amplifier-online stack list"
         ✅ If succeeds → "Azure authentication working"
       
       Loop this stage until all checks pass. Use while_condition to retry.

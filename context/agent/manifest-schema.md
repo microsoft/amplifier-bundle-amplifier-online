@@ -76,7 +76,7 @@ resources:
 - ❌ `My App`, `my_api`, `my.api`
 
 ### `stack`
-- **Required.** Must exactly match a stack name returned by `amplifier-online stacks`.
+- **Required.** Must exactly match a stack name returned by `amplifier-online stack list`.
 - Current valid values: `web-app-aca`, `web-app-awa`, `static-web-app`
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
@@ -451,7 +451,7 @@ backend:
 Before running `amplifier-online up`, verify:
 
 - [ ] `name` is URL-safe (lowercase, hyphens only)
-- [ ] `stack` exactly matches output of `amplifier-online stacks`
+- [ ] `stack` exactly matches output of `amplifier-online stack list`
 - [ ] All `image:` values use ACR format (`<acr>.azurecr.io/...`)
 - [ ] All `port:` values match what the application listens on
 - [ ] For containerized deployments: images have been built and pushed to ACR

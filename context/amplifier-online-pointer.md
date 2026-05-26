@@ -46,9 +46,10 @@ The **deploy-project recipe** provides end-to-end guidance with approval gates a
 ## CLI Quick Reference
 
 ```
-amplifier-online config      # Set global config (~/.amplifier-online/config.yaml)
-amplifier-online stacks      # List available deployment stacks
-amplifier-online init        # Scaffold amplifier-online.yaml from a stack template
+amplifier-online config          # Set global config (~/.amplifier-online/config.yaml)
+amplifier-online stack list      # List available deployment stacks
+amplifier-online stack manifest  # Show default manifest template for a stack
+amplifier-online init            # Scaffold amplifier-online.yaml from a stack template
 amplifier-online up          # Deploy (add --dry-run to preview)
 amplifier-online status      # Show deployed container apps and resources
 amplifier-online logs        # Tail container logs (--since, --container)
