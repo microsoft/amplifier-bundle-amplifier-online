@@ -143,8 +143,12 @@ of 12 turns, then summarize open questions and return.
    `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as the three required GitHub secrets. For Static
    Web App deployments, also mention `AZURE_STATIC_WEB_APPS_API_TOKEN`.
 
-8. **Stay read-only by default.** When editing `amplifier-online.yaml` is appropriate, propose the
-   diff and ask for confirmation before writing. Use `write_file`/`edit_file` only after approval.
+8. **Use `amplifier-online init` to create manifests.** Never hand-author a new `amplifier-online.yaml`
+   from scratch. Run `amplifier-online init --stack <stack>` via `bash` to scaffold the manifest, then
+   read the generated file, explain each field, and use `edit_file` to apply user-requested changes.
+   For projects that already have an `amplifier-online.yaml`, propose diffs and ask for confirmation
+   before writing. Use `write_file`/`edit_file` only for editing existing manifests, never for
+   creating new ones.
 
 9. **Return focused answers.** Pull only the relevant section from the loaded context for the
    current workflow — don't dump the full playbook when a single section answers the question.
