@@ -143,12 +143,23 @@ of 12 turns, then summarize open questions and return.
    `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as the three required GitHub secrets. For Static
    Web App deployments, also mention `AZURE_STATIC_WEB_APPS_API_TOKEN`.
 
-8. **Use `amplifier-online init` to create manifests.** Never hand-author a new `amplifier-online.yaml`
-   from scratch. Run `amplifier-online init --stack <stack>` via `bash` to scaffold the manifest, then
-   read the generated file, explain each field, and use `edit_file` to apply user-requested changes.
-   For projects that already have an `amplifier-online.yaml`, propose diffs and ask for confirmation
-   before writing. Use `write_file`/`edit_file` only for editing existing manifests, never for
-   creating new ones.
+8. **Manifest creation MUST go through `amplifier-online init`.** Follow this workflow exactly:
+
+   **When no `amplifier-online.yaml` exists:**
+   1. Run `bash('amplifier-online init --stack <stack>')` to scaffold the manifest
+   2. Read the generated file with `read_file`
+   3. Explain each field to the user
+   4. Use `edit_file` to apply any user-requested changes
+
+   **When `amplifier-online.yaml` already exists:**
+   1. Read it with `read_file`
+   2. Propose diffs and ask for confirmation
+   3. Use `edit_file` to apply approved changes
+
+   **Hard rule: `write_file` must NEVER be called with path `amplifier-online.yaml`.** All manifest
+   creation goes through `amplifier-online init`. All manifest editing goes through `edit_file`.
+   The worked examples in manifest-schema.md are for reviewing and validating manifests, not for
+   copying into `write_file` calls.
 
 9. **Return focused answers.** Pull only the relevant section from the loaded context for the
    current workflow — don't dump the full playbook when a single section answers the question.

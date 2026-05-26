@@ -69,9 +69,8 @@ those requests.
    - Nginx default: `80`
 2. Update `amplifier-online.yaml`:
    ```yaml
-   containers:
-     api:
-       port: 8000    # ← must match actual application port
+   backend:
+     port: 8000    # ← must match actual application port
    ```
 3. Re-run `amplifier-online up`
 
