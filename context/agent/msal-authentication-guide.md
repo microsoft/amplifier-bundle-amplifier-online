@@ -122,8 +122,8 @@ useEffect(() => {
 
 ## Step 4: Handle SSO Silent
 
-**This step is CRITICAL when EasyAuth is enabled on the web container** (`protect_assets: true`
-configuration in your project).
+**This step is CRITICAL when EasyAuth is enabled on the web service** (`protected: login` or `protected: { mode: login, ... }`
+configuration in your project manifest).
 
 EasyAuth handles the initial login and creates an Azure AD session. MSAL.js must use `ssoSilent()`
 to silently establish an MSAL account from that existing session **without prompting the user to

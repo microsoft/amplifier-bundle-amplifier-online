@@ -292,7 +292,7 @@ env:
 ```yaml
 env:
   AZURE_STATIC_WEB_APPS_API_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-  # Other configuration comes from amplifier-online.yaml frontend section
+  # Other configuration comes from amplifier-online.yaml
 ```
 
 ---
@@ -325,7 +325,7 @@ After running `amplifier-online cicd create`:
 ## Idempotency and Re-running
 
 - Running `amplifier-online cicd create` again regenerates the workflows from the current manifest
-- Changes to stack, backend image, or frontend repo in `amplifier-online.yaml` → regenerate workflows
+- Changes to stack, service images, or frontend repo in `amplifier-online.yaml` → regenerate workflows
 - Workflow files can be committed to git; treat them as generated but version-controlled
 
 ---

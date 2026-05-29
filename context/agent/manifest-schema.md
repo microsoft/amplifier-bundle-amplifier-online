@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `backend`, `frontend`, and `resources`.
+> `services`, and `resources`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -23,29 +23,24 @@ then edited by the developer.
 name: <project-name>          # Unique project identifier (URL-safe, lowercase, hyphens)
 stack: <stack-name>           # Which stack to deploy with (web-app-aca, web-app-awa, or static-web-app)
 
-# Backend configuration (required for web-app-aca and web-app-awa)
-backend:
-  image: <acr-image>          # ACR image URI (required for container-based stacks)
-  port: <port-number>         # Port your backend listens on (integer)
-  env:                        # Optional environment variables
-    - name: <env-var-name>
-      value: <env-var-value>
-
-# Frontend configuration (required for all stacks)
-frontend:
-  type: <container|static-web-app>  # Type of frontend deployment
-  
-  # For type: container (web-app-aca only)
-  image: <acr-image>          # ACR image URI
-  port: <port-number>         # Port your frontend listens on (integer)
-  
-  # For type: static-web-app (web-app-awa and static-web-app)
-  repo: <github-url>          # GitHub repository URL
-  branch: <branch-name>       # Branch to deploy from (default: main)
-  app_location: <path>        # Path to app source in repo (default: /)
-  output_location: <path>     # Build output directory (e.g., dist, build, out)
-  build_command: <command>    # Optional build command (default: npm run build)
-  api_location: <path>        # Optional serverless API directory (static-web-app only)
+# Services map (required for web-app-aca; at least one service)
+# Keys are service names — any name works (e.g., api, web, worker)
+services:
+  <service-name>:
+    image: <acr-image>        # ACR image URI (required)
+    port: <port-number>       # Port your service listens on (integer, required)
+    protected: <mode>         # Shorthand: validate | login | false (default: false)
+    # — OR object form —
+    # protected:
+    #   mode: <mode>           # validate | login | false
+    #   exclude: [<paths>]     # Path prefixes where EasyAuth is bypassed (e.g., ["/api"])
+    auth: <bool>              # Whether service needs AAD identity (default: implied true when protected != false)
+    env:                      # Optional environment variables
+      - name: <env-var-name>
+        value: <env-var-value>
+    volume:                   # Optional per-service persistent volume
+      mount_path: <path>      # Mount path inside the container
+      size_gib: <integer>     # Volume size in GiB
 
 # Optional: resource flags (defaults to all disabled)
 resources:
@@ -80,29 +75,13 @@ resources:
 - Current valid values: `web-app-aca`, `web-app-awa`, `static-web-app`
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
-### `backend`
-- **Required for:** `web-app-aca`, `web-app-awa`
-- **Not used for:** `static-web-app`
-- Must have `image` and `port` fields
-- `image` must reference ACR in format: `<acr-name>.azurecr.io/<project>-<service>:<tag>`
-- `env` is optional for additional environment variables
+### `services`
+- **Required for:** `web-app-aca`
+- A named map of services. Keys are service names (any name works: `api`, `web`, `worker`, etc.).
+- Each service must have `image` and `port`.
+- At least one service is required for `web-app-aca`.
 
-### `frontend`
-- **Required for all stacks.**
-- Must have `type` field declaring either `container` or `static-web-app`
-
-**For `type: container` (web-app-aca only):**
-- Must have `image` and `port` fields
-- Image must be in ACR format
-- Port must match what your frontend container listens on
-
-**For `type: static-web-app` (web-app-awa and static-web-app):**
-- Must have `repo`, `branch`, `app_location`, and `output_location`
-- `repo` must be a valid GitHub repository URL
-- `build_command` defaults to `npm run build` if omitted
-- `api_location` is optional (only for serverless functions in static-web-app)
-
-### `backend.image` and `frontend.image` — ACR Format (Critical)
+### `services.<name>.image` — ACR Format (Critical)
 
 All container images MUST reference the shared Azure Container Registry:
 
@@ -122,8 +101,8 @@ The `acr_name` comes from `~/.amplifier-online/config.yaml`. Default is `amplifi
 Images must be pushed to ACR BEFORE running `amplifier-online up`. The service does not
 build images — it deploys whatever tag is currently in the registry.
 
-### `port`
-- **Required for containerized frontends and all backends.**
+### `services.<name>.port`
+- **Required for each service.**
 - Integer matching the port your application ACTUALLY listens on.
 - Common ports:
   - FastAPI / uvicorn: `8000`
@@ -133,14 +112,76 @@ build images — it deploys whatever tag is currently in the registry.
   - Nginx (static): `80`
 - ❌ Wrong port is a common failure mode: app runs but health checks fail
 
-### `frontend.output_location`
-- **Required for static-web-app frontend types.**
-- Must match your build tool's actual output directory:
-  - Vite → `dist`
-  - Webpack → `dist` or `build`
-  - Next.js (static export) → `out`
-  - Create React App → `build`
-- ❌ Common mistake: `src` (source directory, not build output)
+### `services.<name>.protected`
+- **Optional.** Controls EasyAuth protection mode for the service.
+- Accepts a **shorthand string** or an **object form**.
+
+**Shorthand** (string value):
+- `validate` — EasyAuth returns 401 for unauthenticated requests (API pattern: caller supplies token)
+- `login` — EasyAuth redirects unauthenticated users to login page (web frontend pattern)
+- `false` — No authentication required (default)
+
+**Object form** (when you need path exclusions):
+```yaml
+protected:
+  mode: validate   # or login / false — same values as shorthand
+  exclude: ["/api", "/webhooks"]   # path prefixes where EasyAuth is bypassed
+```
+- `mode` — required, same values as the shorthand string.
+- `exclude` — optional list of path prefixes. Requests matching these prefixes skip EasyAuth
+  enforcement entirely. Use this when a frontend proxies API calls through the same hostname —
+  without exclusion, EasyAuth intercepts those paths and issues a login redirect that `fetch()`
+  cannot follow.
+- `/health` is always excluded by the platform — you do not need to list it.
+
+When `protected` is `validate` or `login` (in either form), `auth` is implied `true` (AAD identity provisioned).
+
+### `services.<name>.auth`
+- **Optional.** Whether the service needs an AAD (Entra) identity.
+- Implied `true` when `protected != false`.
+- Set explicitly to `true` if a service needs AAD identity without EasyAuth protection
+  (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
+- The orchestrator skips Entra app registration entirely when no service has auth enabled.
+
+### `services.<name>.volume` / `backend.volume`
+- **Optional.** Attaches a persistent volume to a service.
+- `mount_path` — path inside the container where the volume is mounted.
+- `size_gib` — size of the volume in GiB.
+- Not under `resources` — defined on the service/backend directly.
+- **Supported stacks:** `web-app-aca` (under `services.<name>.volume`) and `web-app-awa`
+  (under `backend.volume`). Not supported on `static-web-app`.
+- **`mount_path` constraint for `web-app-awa`:** Must start with `/mounts/` (e.g.,
+  `/mounts/data`). This is an Azure Web App platform requirement. `web-app-aca` has no
+  prefix restriction — any absolute path works (e.g., `/data`).
+- **Single-instance enforcement:** Both stacks automatically enforce single-instance mode
+  (`maxReplicas=1` or equivalent) when a volume is configured. This ensures only one
+  container instance writes to the volume at a time.
+
+#### SQLite on Azure Files Volumes
+
+Volumes are backed by Azure Files (SMB). SMB does not reliably support POSIX advisory file locks,
+which breaks SQLite's default locking and WAL mode. Two changes are required:
+
+1. **Use the `unix-none` VFS** — skips all `fcntl()` lock calls. Safe because `maxReplicas=1`
+   guarantees a single writer.
+2. **Use `DELETE` journal mode** (the SQLite default) — not WAL. WAL creates `-wal` and `-shm`
+   shared memory files that SMB cannot reliably back.
+
+**Required connection setup (Python example):**
+```python
+import sqlite3
+
+# web-app-aca: mount_path can be any absolute path (e.g., /data)
+# web-app-awa: mount_path must start with /mounts/ (e.g., /mounts/data)
+conn = sqlite3.connect("file:/data/app.db?vfs=unix-none", uri=True)
+conn.execute("PRAGMA journal_mode = DELETE")
+conn.execute("PRAGMA synchronous = NORMAL")
+conn.execute("PRAGMA foreign_keys = ON")
+```
+
+**Why this is safe:** The platform enforces `maxReplicas=1` when a volume is present, so there
+is never concurrent access from multiple container instances. The lockless `unix-none` VFS is
+appropriate because only one process ever writes.
 
 ### `resources`
 - **Optional** (all disabled by default).
@@ -167,17 +208,20 @@ build images — it deploys whatever tag is currently in the registry.
 name: my-project
 stack: web-app-aca
 
-backend:
-  image: amplifieronlinecr.azurecr.io/my-project-api:latest
-  port: 8000
-  env:
-    - name: LOG_LEVEL
-      value: info
-
-frontend:
-  type: container
-  image: amplifieronlinecr.azurecr.io/my-project-web:latest
-  port: 80
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-project-api:latest
+    port: 8000
+    protected: validate
+    env:
+      - name: LOG_LEVEL
+        value: info
+  web:
+    image: amplifieronlinecr.azurecr.io/my-project-web:latest
+    port: 80
+    protected:
+      mode: login
+      exclude: ["/api"]   # Don't intercept proxied API calls
 
 resources:
   postgres:
@@ -193,65 +237,56 @@ resources:
     enabled: false
 ```
 
-### Stack: web-app-awa (container backend + static frontend)
+### Stack: web-app-aca with volume
 
 ```yaml
-name: my-project
-stack: web-app-awa
+name: data-service
+stack: web-app-aca
 
-backend:
-  image: amplifieronlinecr.azurecr.io/my-project-api:latest
-  port: 8000
-
-frontend:
-  type: static-web-app
-  repo: https://github.com/my-org/my-repo
-  branch: main
-  app_location: "/"
-  output_location: "dist"
-  build_command: "npm run build"
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/data-service-api:latest
+    port: 8000
+    protected: validate
+    auth: true
+    volume:
+      mount_path: /data
+      size_gib: 16
+  web:
+    image: amplifieronlinecr.azurecr.io/data-service-web:latest
+    port: 3000
+    protected:
+      mode: login
+      exclude: ["/api"]
 
 resources:
   postgres:
-    enabled: true
-  cosmos:
-    enabled: false
-  redis:
-    enabled: false
-  storage:
     enabled: false
 ```
+
+### Stack: web-app-awa (container backend + static frontend)
+
+> **Note:** The `web-app-awa` stack with a static frontend is currently in development.
+> The new `services` schema applies to `web-app-aca`. For `web-app-awa`, manifest
+> format is TBD — use `amplifier-online init --stack web-app-awa` for the current template.
 
 ### Stack: static-web-app (pure static site)
 
-```yaml
-name: my-static-site
-stack: static-web-app
+> **Note:** The `static-web-app` stack is currently in development for the new schema.
+> Use `amplifier-online init --stack static-web-app` for the current template.
 
-frontend:
-  type: static-web-app
-  repo: https://github.com/my-org/my-repo
-  branch: main
-  app_location: "/"
-  output_location: "dist"
-  build_command: "npm run build"
-  api_location: "api"    # Optional: for serverless functions
-
-# No backend section for static-web-app
-# No resources section — static-web-app doesn't support databases
-```
-
-### Minimal: API only (web-app-aca with backend only)
+### Minimal: API only (web-app-aca, single service)
 
 ```yaml
 name: my-api
 stack: web-app-aca
 
-backend:
-  image: amplifieronlinecr.azurecr.io/my-api:latest
-  port: 8000
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-api:latest
+    port: 8000
 
-# No frontend section — backend-only deployment
+# No other services — single-service deployment
 
 resources:
   postgres:
@@ -262,6 +297,20 @@ resources:
     enabled: false
   storage:
     enabled: false
+```
+
+### No auth (public API)
+
+```yaml
+name: public-api
+stack: web-app-aca
+
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/public-api:latest
+    port: 8000
+    # protected defaults to false — no EasyAuth
+    # No Entra app registration created
 ```
 
 ---
@@ -272,29 +321,38 @@ resources:
 
 | Requirement | Rule |
 |-------------|------|
-| Backend | Required: `image`, `port` |
-| Frontend | Optional: `type: container`, `image`, `port` |
+| Services | Required: at least one service with `image`, `port` |
+| Protected | Optional per-service: `validate`, `login`, or `false` (string or object with `mode` + `exclude`) |
+| Auth | Implied when protected; Entra registration skipped when no service has auth |
+| Volume | Optional per-service: `mount_path`, `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
-| Dockerfiles | Must exist for each container (not part of manifest, but prerequisite) |
+| Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
 
 ### `web-app-awa`
 
+> **In development** for the new `services` schema. Currently uses legacy format.
+> Use `amplifier-online init --stack web-app-awa` for the current template.
+
 | Requirement | Rule |
 |-------------|------|
 | Backend | Required: `image`, `port` |
-| Frontend | Required: `type: static-web-app`, `repo`, `branch`, `app_location`, `output_location` |
+| Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
+| Volume | Optional on backend: `mount_path` (must start with `/mounts/`), `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | GitHub repo | Frontend code must be in GitHub |
 | CORS | Backend must allow frontend origin |
 
 ### `static-web-app`
 
+> **In development** for the new `services` schema.
+> Use `amplifier-online init --stack static-web-app` for the current template.
+
 | Requirement | Rule |
 |-------------|------|
 | Backend | Not supported — no backend section |
-| Frontend | Required: `type: static-web-app`, `repo`, `branch`, `app_location`, `output_location` |
+| Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
 | Resources | Not supported — no resources section |
 | GitHub repo | Frontend code must be in GitHub |
 | Serverless API | Optional via `api_location` field |
@@ -306,15 +364,24 @@ resources:
 ## Auto-Injected Environment Variables
 
 When your containers deploy, Amplifier Online **automatically injects environment variables** based
-on the resources you enable. These are available to your application code without needing to
-declare them in `backend.env` or `frontend.env`.
+on the resources you enable and auth configuration. These are available to your application code
+without needing to declare them in `services.<name>.env`.
 
-### Always Injected (All Stacks)
+### Injected When Auth Is Configured (service has `protected` or `auth: true`)
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
 | `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend authentication |
 | `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration |
+
+**Note:** These are only injected for services that have auth enabled. When no service has
+`protected` or `auth: true`, the orchestrator skips Entra app registration entirely and these
+variables are not set.
+
+### Always Injected (All Container Stacks)
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | string | Application Insights connection string | Telemetry, logging, metrics |
 
 ### Injected When `postgres.enabled: true`
@@ -426,17 +493,18 @@ blob_service = BlobServiceClient(
 ### Custom Environment Variables
 
 If you need **additional** environment variables beyond the auto-injected ones, declare them in
-the manifest:
+the service:
 
 ```yaml
-backend:
-  image: amplifieronlinecr.azurecr.io/my-api:latest
-  port: 8000
-  env:
-    - name: MY_CUSTOM_VAR
-      value: "some-value"
-    - name: FEATURE_FLAG_X
-      value: "true"
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-api:latest
+    port: 8000
+    env:
+      - name: MY_CUSTOM_VAR
+        value: "some-value"
+      - name: FEATURE_FLAG_X
+        value: "true"
 ```
 
 **Rules:**
@@ -454,9 +522,10 @@ Before running `amplifier-online up`, verify:
 - [ ] `stack` exactly matches output of `amplifier-online stack list`
 - [ ] All `image:` values use ACR format (`<acr>.azurecr.io/...`)
 - [ ] All `port:` values match what the application listens on
+- [ ] `protected` values are valid (shorthand: `validate`, `login`, `false`; or object with `mode` + optional `exclude`)
 - [ ] For containerized deployments: images have been built and pushed to ACR
 - [ ] For containerized deployments: each container has `/health` endpoint
-- [ ] For static-web-app frontends: `output_location` matches build tool output directory
-- [ ] For static-web-app frontends: GitHub repo URL is correct and accessible
+- [ ] `volume` config (if used) has both `mount_path` and `size_gib`
+- [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)
 - [ ] Resource flags (`enabled: true/false`) are intentional
 - [ ] Global config (`~/.amplifier-online/config.yaml`) matches the target environment's `acr_name`

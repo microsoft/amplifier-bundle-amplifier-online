@@ -146,7 +146,7 @@ stages:
       IF MANIFEST EXISTS:
         - Read the manifest with read_file
         - Validate against @amplifier-online:context/agent/manifest-schema.md
-        - Check for outdated schema (e.g., uses `containers:` instead of `backend:`/`frontend:`)
+        - Check for outdated schema (e.g., uses `containers:` instead of `services:` for web-app-aca). Note: `backend:`/`frontend:` is the current schema for web-app-awa.
         - Propose fixes for any schema drift
         - Ask user: "I found an existing manifest. [Show summary]. Want to update it or keep as-is?"
       
@@ -161,9 +161,11 @@ stages:
       name: my-project              # ← Change this to your project name
       stack: {{ selected_stack }}
       
-      backend:
-        image: amplifieronlinecr.azurecr.io/my-project-api:latest  # ← Update project name
-        port: 8000                  # ← Must match your app's listen port
+      services:
+        api:
+          image: amplifieronlinecr.azurecr.io/my-project-api:latest  # ← Update project name
+          port: 8000                # ← Must match your app's listen port
+          protected: validate       # ← validate | login | false; or object form {mode, exclude}
       
       [... rest of manifest with annotations ...]
       ```
@@ -242,7 +244,7 @@ stages:
       
       Read the manifest to extract image names and Dockerfile paths.
       
-      For each container (backend, frontend if type: container):
+      For each service defined in the `services:` map:
         1. Generate the build command:
            docker build -t [image-from-manifest] [dockerfile-dir]
         
@@ -334,7 +336,7 @@ stages:
         
         ✅ If 200 OK → "Health check passed"
         ❌ If failed → Engage troubleshooting mode:
-          1. amplifier-online logs --container [backend/frontend]
+          1. amplifier-online logs --container [service-name]
           2. Map error to failure mode in troubleshooting-playbook.md
           3. Guide remediation
         {% else %}

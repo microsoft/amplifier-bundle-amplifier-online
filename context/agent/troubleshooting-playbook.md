@@ -67,10 +67,11 @@ those requests.
    - Flask/gunicorn default: `5000`
    - Express/Node default: `3000`
    - Nginx default: `80`
-2. Update `amplifier-online.yaml`:
+2. Update the service port in `amplifier-online.yaml`:
    ```yaml
-   backend:
-     port: 8000    # ← must match actual application port
+   services:
+     api:
+       port: 8000    # ← must match actual application port
    ```
 3. Re-run `amplifier-online up`
 
@@ -259,6 +260,141 @@ tag was updated but the manifest still references the old SHA.
 
 ---
 
+## Failure Mode 11: EasyAuth Intercepts Proxied API Calls (Frontend Fetch Fails)
+
+**Symptom:** Frontend `fetch("/api/...")` calls return HTML instead of JSON, or fail silently.
+Browser DevTools shows a 302 redirect to the Microsoft login page:
+```
+fetch("/api/items") → 302 → https://login.microsoftonline.com/...
+TypeError: Failed to fetch (or CORS error on the redirect)
+```
+The web app loads fine (user is logged in), but all JavaScript API calls through the same
+hostname are broken.
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container web    # Look for 302 responses on /api/* paths
+# In browser DevTools → Network tab: check if /api/* requests get a 302 to login.microsoftonline.com
+```
+
+**Root cause:** EasyAuth is enabled on the web service with `protected: login`, which enforces
+authentication on **all** paths — including `/api/...` paths that the frontend proxies to the
+API service. When the browser's `fetch()` hits EasyAuth on a proxied path, EasyAuth returns a
+302 redirect to the login page. `fetch()` cannot follow cross-origin auth redirects, so the
+call fails.
+
+**Fix:**
+
+Add `exclude` to the web service's `protected` config to bypass EasyAuth on the proxied paths:
+
+```yaml
+services:
+  web:
+    image: amplifieronlinecr.azurecr.io/my-project-web:latest
+    port: 80
+    protected:
+      mode: login
+      exclude: ["/api"]      # ← EasyAuth skips /api/* paths; proxy forwards them directly
+  api:
+    image: amplifieronlinecr.azurecr.io/my-project-api:latest
+    port: 8000
+    protected: validate      # ← The API service still enforces auth via token validation
+```
+
+Then redeploy:
+```bash
+amplifier-online up
+```
+
+**Key insight:** The API service has its own `protected: validate` enforcement, so the
+excluded paths are still authenticated — just by the API service (via token) rather than by
+EasyAuth on the web service (via redirect). The `exclude` field only removes the web service's
+EasyAuth gate on those path prefixes.
+
+---
+
+## Failure Mode 12: SQLite Errors on Azure Files Volume
+
+**Applies to:** `web-app-aca` and `web-app-awa` (both use Azure Files SMB-backed volumes).
+
+**Symptom:** SQLite operations fail with locking or I/O errors, or data is silently corrupted:
+```
+sqlite3.OperationalError: database is locked (SQLITE_BUSY)
+sqlite3.OperationalError: disk I/O error (SQLITE_IOERR)
+Data corruption or missing rows after WAL checkpoint
+```
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container api    # Look for SQLITE_BUSY, SQLITE_IOERR
+grep "volume:" amplifier-online.yaml     # Confirm service/backend has a volume mount
+```
+
+**Root cause:** Both stacks back volumes with Azure Files (SMB), which does not reliably
+support POSIX advisory file locks. SQLite's default VFS uses `fcntl()` locks that silently
+fail on SMB. WAL mode creates `-wal` and `-shm` shared memory files that SMB cannot reliably
+back, leading to corruption or I/O errors.
+
+**Fix:**
+
+1. Connect using the `unix-none` VFS (disables file locking) and `DELETE` journal mode.
+   Adjust the path to match your stack's mount point:
+   ```python
+   import sqlite3
+
+   # web-app-aca: mount_path can be any absolute path (e.g., /data)
+   # web-app-awa: mount_path must start with /mounts/ (e.g., /mounts/data)
+   conn = sqlite3.connect("file:/data/app.db?vfs=unix-none", uri=True)
+   conn.execute("PRAGMA journal_mode = DELETE")
+   conn.execute("PRAGMA synchronous = NORMAL")
+   conn.execute("PRAGMA foreign_keys = ON")
+   ```
+
+2. Verify the volume is configured in `amplifier-online.yaml` — both stacks automatically
+   enforce single-instance mode (`maxReplicas=1` or equivalent) when a volume is present,
+   which makes the lockless VFS safe.
+
+**Key insight:** `unix-none` skips all `fcntl()` lock calls. This is safe because
+single-instance enforcement guarantees only one container instance writes to the database.
+Do NOT use WAL mode — its shared memory files are incompatible with SMB.
+
+---
+
+## Failure Mode 13: web-app-awa Volume mount_path Missing `/mounts/` Prefix
+
+**Applies to:** `web-app-awa` only.
+
+**Symptom:** `amplifier-online up` fails or the volume is not mounted at the expected path:
+```
+Error: mount path must start with /mounts/
+Volume mount failed: invalid mount_path "/data"
+```
+
+**Diagnostic:**
+```bash
+grep -A2 "volume:" amplifier-online.yaml    # Check mount_path value
+grep "stack:" amplifier-online.yaml          # Confirm web-app-awa stack
+```
+
+**Root cause:** Azure Web App (Linux) requires that custom storage mounts use paths under
+`/mounts/`. Unlike `web-app-aca` (which accepts any absolute path), `web-app-awa` rejects
+mount paths that don't start with `/mounts/`.
+
+**Fix:**
+1. Update `mount_path` in the manifest to use the `/mounts/` prefix:
+   ```yaml
+   backend:
+     image: amplifieronlinecr.azurecr.io/my-project-api:latest
+     port: 8000
+     volume:
+       mount_path: /mounts/data    # ✅ correct for web-app-awa
+       size_gib: 16
+   ```
+2. Update your application code to read/write from the new path (e.g., `/mounts/data/app.db`
+   instead of `/data/app.db`).
+3. Re-run `amplifier-online up`.
+
+---
 ## Diagnostic Commands Quick Reference
 
 ```bash
@@ -305,12 +441,10 @@ the allowed group, EasyAuth will NOT recognize the user as authorized. Only dire
 2. **Option A (Recommended):** Add the user directly to the authorized group
    - Azure Portal → Entra ID → Groups → [group] → Add member
 
-3. **Option B:** Change the manifest to use a different group that contains direct members
-   ```yaml
-   resources:
-     entra:
-       admin_group: <object-id-of-flat-group>
-       user_group: <object-id-of-flat-group>
+3. **Option B:** Update the global config to use a different group that contains direct members
+   ```bash
+   amplifier-online config
+   # Update admin_group / user_group to a group with only direct members
    ```
 
 4. Re-run `amplifier-online up` to update EasyAuth configuration
@@ -320,78 +454,44 @@ not work with Container Apps EasyAuth or Static Web Apps authentication.
 
 ---
 
-## Failure Mode 10: Health Endpoint Returns 401 (EasyAuth Blocks It)
+## Failure Mode 10: Custom Health Path Returns 401 (EasyAuth Blocks It)
 
 **Symptom:** Deployment completes but Container App shows unhealthy, or Azure health probes fail:
 ```
-Health probe failed: GET /health returned 401 Unauthorized
+Health probe failed: GET /healthz returned 401 Unauthorized
 Container app revision failing: health check timeout
 amplifier-online status shows: Revision: Failed
 ```
 
+**Note:** The platform automatically excludes `/health` from EasyAuth enforcement. This failure
+mode only applies if your app uses a **custom health path** (e.g., `/healthz`, `/ready`) that
+is not auto-excluded.
+
 **Diagnostic:**
 ```bash
-amplifier-online logs --container api    # Look for repeated GET /health requests
+amplifier-online logs --container api    # Look for repeated health probe requests
 amplifier-online status                  # Check revision status
-curl https://<app-url>/health            # Test from outside (will also 401 if EasyAuth enabled)
+curl https://<app-url>/healthz           # Test from outside (will 401 if not excluded)
 ```
 
-**Root cause:** EasyAuth is enabled globally on the Container App, which means **ALL endpoints**
-require authentication by default, including health check endpoints. Azure's health probe doesn't
-send auth tokens, so it gets a 401 and marks the container as unhealthy.
+**Root cause:** EasyAuth is enabled on the Container App and your custom health path is not in
+the excluded paths list. Azure's health probe doesn't send auth tokens, so it gets a 401 and
+marks the container as unhealthy. The standard `/health` path is always excluded automatically,
+but custom paths are not.
 
-**Fix:**
-
-**Option 1 (Recommended):** Exclude `/health` from EasyAuth requirements
-
-Modify your backend to allow unauthenticated access to health endpoints:
-
-For **FastAPI** (using EasyAuth headers):
-```python
-from fastapi import FastAPI, Request
-
-app = FastAPI()
-
-@app.get("/health")
-def health():
-    # Health endpoint is always accessible (no auth check)
-    return {"status": "healthy"}
-
-@app.get("/api/protected")
-def protected_route(request: Request):
-    # Protected routes check for EasyAuth headers
-    user_id = request.headers.get("x-ms-client-principal-id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"user": user_id}
+**Fix:** Add your custom health path to the service's `exclude` list:
+```yaml
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-project-api:latest
+    port: 8000
+    protected:
+      mode: validate
+      exclude: ["/healthz", "/ready"]    # Add custom health paths here
 ```
 
-For **Express** (using EasyAuth headers):
-```javascript
-app.get('/health', (req, res) => {
-  // Health endpoint - no auth check
-  res.json({ status: 'healthy' });
-});
-
-app.get('/api/protected', (req, res) => {
-  // Protected routes check for EasyAuth headers
-  const userId = req.headers['x-ms-client-principal-id'];
-  if (!userId) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  res.json({ user: userId });
-});
-```
-
-**Option 2:** Use a different health check path that doesn't require external probes
-
-If your app must authenticate ALL endpoints, configure Container Apps to use:
-- Startup probe on an internal endpoint (container-internal only)
-- Or rely on process health instead of HTTP health checks
-
-**Key insight:** EasyAuth injects authentication headers (`x-ms-client-principal-*`) for
-authenticated requests. Your app should check for these headers on protected routes, but
-leave health/readiness endpoints unauthenticated so Azure's infrastructure can probe them.
+**Key insight:** `/health` is auto-excluded by the platform — you never need to list it. But if
+your app uses a non-standard health path, you must explicitly exclude it.
 
 **After fixing:**
 1. Rebuild and push the updated container image

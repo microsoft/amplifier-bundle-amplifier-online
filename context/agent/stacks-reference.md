@@ -20,6 +20,7 @@ Match your application's architecture to a stack using these criteria:
 | Multi-container backend + frontend | ✅ | ❌ | ❌ |
 | Single backend container + static frontend | ❌ | ✅ | ❌ |
 | Pure static site (no backend) | ❌ | ❌ | ✅ |
+| Persistent volumes | ✅ | ✅ | ❌ |
 | Needs managed databases | ✅ | ✅ | ❌ |
 | Container-to-container networking | ✅ | ❌ | ❌ |
 | GitHub-integrated CI/CD for frontend | ⚠️ | ✅ | ✅ |
@@ -56,8 +57,7 @@ Available deployment stacks:
 ### What it provisions
 
 - **Container Apps Environment** — shared, managed by the Platform
-- **Backend container app** — for API service (port 8000 or custom)
-- **Frontend container app** — for React/Vue/static web (port 80 or 3000)
+- **Container apps** — one per service in the `services:` map (e.g., api, web, worker)
 - **Optional: PostgreSQL** (flexible server, shared with other projects)
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
@@ -105,17 +105,20 @@ Available deployment stacks:
 name: my-project
 stack: web-app-aca       # ← must exactly match this string
 
-backend:
-  image: amplifieronlinecr.azurecr.io/my-project-api:latest
-  port: 8000             # ← must match the port your API listens on
-  env:
-    - name: LOG_LEVEL
-      value: info
-
-frontend:
-  type: container        # ← distinguishes from static-web-app type
-  image: amplifieronlinecr.azurecr.io/my-project-web:latest
-  port: 80               # ← must match the port your web server listens on
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-project-api:latest
+    port: 8000           # ← must match the port your API listens on
+    protected: validate  # ← validate (401) | login (redirect) | false (no auth)
+    env:
+      - name: LOG_LEVEL
+        value: info
+  web:
+    image: amplifieronlinecr.azurecr.io/my-project-web:latest
+    port: 80             # ← must match the port your web server listens on
+    protected:           # ← EasyAuth forces sign-in for this service
+      mode: login
+      exclude: ["/api"]  # ← Don't intercept proxied API calls
 
 resources:
   postgres:
@@ -134,10 +137,14 @@ resources:
     sku: Standard_LRS    # ← optional: Locally-redundant (default)
 ```
 
-**Key differences from older manifest format:**
-- Uses `backend:` and `frontend:` instead of `containers:`
-- `frontend.type: container` explicitly declares it's containerized
-- Resource SKU configuration is now supported
+**Key concepts:**
+- Uses `services:` map — keys are service names (any name works)
+- Per-service `protected` field controls EasyAuth: `validate`, `login`, or `false` (shorthand string), or an object with `mode` + `exclude` for path exclusions
+- Per-service `auth` field (implied when protected) controls Entra identity
+- Volumes attach per-service (not under `resources`). When a volume is configured, the platform
+  automatically enforces `maxReplicas=1` (single-instance mode). This is required for safe
+  filesystem access over Azure Files (SMB). If using SQLite on a volume, see the
+  `services.<name>.volume` section in the manifest schema for VFS and journal mode requirements.
 
 ---
 
@@ -212,6 +219,15 @@ resources:
 - Webpack → `dist` or `build`
 - Next.js (static export) → `out`
 - Create React App → `build`
+
+**Key concepts:**
+- Uses `backend:` / `frontend:` keys — not the `services:` map used by `web-app-aca`.
+- Volumes are supported on the backend. Add `volume` with `mount_path` and `size_gib`
+  under `backend:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
+  — this is an Azure Web App platform requirement. The platform enforces single-instance
+  mode when a volume is configured. If using SQLite on a volume, see the
+  `services.<name>.volume` section in the manifest schema for VFS and journal mode
+  requirements — the same Azure Files (SMB) guidance applies to both stacks.
 
 ### Frontend ↔ Backend Communication
 
@@ -335,7 +351,7 @@ Azure resources, and there is no migration path between stacks.
 
 ```bash
 amplifier-online destroy          # 1. Tear down current stack resources
-# Edit amplifier-online.yaml      # 2. Change the stack: field and adjust backend/frontend/resources
+# Edit amplifier-online.yaml      # 2. Change the stack: field and adjust services/resources
 amplifier-online up               # 3. Deploy with the new stack
 ```
 
