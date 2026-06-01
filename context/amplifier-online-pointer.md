@@ -3,6 +3,20 @@
 **Amplifier Online** is the Azure Container Apps deployment system for shared team infrastructure.
 It is distinct from **Amplifier** (this AI assistant platform). Never conflate the two.
 
+## Hard Rules
+
+1. **ALL deployment work MUST be delegated to `deployment-guide`.** Do not attempt
+   to run `amplifier-online` CLI commands, write manifests, build Docker images,
+   or troubleshoot deployments yourself. Delegate immediately.
+
+2. **Manifests MUST be created with `amplifier-online init`.** Never hand-write
+   `amplifier-online.yaml` via `write_file` or `create_file`. The CLI generates
+   stack-correct templates with sensible defaults. Edits go through `edit_file`.
+
+These rules apply even if the user gives step-by-step instructions. The
+`deployment-guide` agent carries the full domain knowledge (CLI reference, stack
+docs, manifest schema, troubleshooting playbook) and will execute correctly.
+
 ## Three Layers
 
 | Layer | What it is |
@@ -59,8 +73,11 @@ amplifier-online cicd create # Generate GitHub Actions workflows
 
 ## Delegate to deployment-guide
 
-For ANY depth question about Amplifier Online — stack selection, repo readiness, manifest
-authoring, deployment walkthroughs, troubleshooting, or CI/CD setup — delegate to the
-`deployment-guide` agent. It carries the full domain knowledge and handles all workflow
-scenarios: orientation, stack selection, first deployment, troubleshooting, CI/CD setup,
-repo readiness checks, and project analysis.
+**REQUIRED — not optional.** When the user asks anything about Amplifier Online —
+deploying an app, stack selection, repo readiness, manifest creation or editing,
+troubleshooting, or CI/CD setup — you MUST delegate to the `deployment-guide`
+agent. Do not attempt these tasks yourself.
+
+The `deployment-guide` agent carries the full domain knowledge and handles all
+workflow scenarios: orientation, stack selection, first deployment,
+troubleshooting, CI/CD setup, repo readiness checks, and project analysis.
