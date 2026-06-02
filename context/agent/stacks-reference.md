@@ -203,6 +203,8 @@ frontend:                # ← separate because Static Web App is not a containe
   app_location: "/"              # ← path to frontend in repo (e.g., "/frontend" for monorepo)
   output_location: "dist"        # ← build output dir (must match vite/webpack config)
   build_command: "npm run build" # ← optional, defaults to "npm run build"
+  protected: login               # ← login (require sign-in) | false (no auth, default)
+  # auth: true                   # ← implied by protected: login; set explicitly for MSAL.js without sign-in enforcement
 
 resources:
   postgres:
@@ -223,6 +225,7 @@ resources:
 
 **Key concepts:**
 - Uses `services:` for the backend container (same pattern as `web-app-aca`) plus `frontend:` for the Static Web App.
+- Frontend supports `protected` (`login` or `false`) and `auth` fields — same pattern as services, but enforced via `staticwebapp.config.json` route rules instead of EasyAuth sidecar. The orchestrator checks both services and frontend when deciding whether to create an Entra app registration.
 - Volumes are supported on the API service. Add `volume` with `mount_path` and `size_gib`
   under `services.api:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
   — this is an Azure Web App platform requirement. The platform enforces single-instance
@@ -300,7 +303,14 @@ frontend:
   output_location: "dist"        # ← build output directory
   build_command: "npm run build" # ← optional, defaults to "npm run build"
   api_location: "api"            # ← optional: serverless functions directory
+  protected: false               # ← login (require sign-in) | false (no auth, default)
+  # auth: true                   # ← set explicitly for MSAL.js token acquisition without sign-in enforcement
 ```
+
+**Frontend auth options:**
+- `protected: login` — require sign-in (configures route-level auth via `staticwebapp.config.json`)
+- `protected: false` — no authentication (default)
+- `auth: true` — register Entra app and inject `AZURE_CLIENT_ID` for MSAL.js token acquisition (implied when `protected: login`)
 
 ### Optional Serverless API Functions
 

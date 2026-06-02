@@ -42,6 +42,18 @@ services:
       mount_path: <path>      # Mount path inside the container
       size_gib: <integer>     # Volume size in GiB
 
+# Frontend config (required for web-app-awa and static-web-app)
+frontend:
+  type: static-web-app
+  repo: <github-repo-url>
+  branch: <branch>
+  app_location: <path>
+  output_location: <path>
+  build_command: <command>
+  api_location: <path>           # Optional: serverless functions directory (static-web-app only)
+  protected: <mode>              # login | false (default: false) — controls SWA route-level auth
+  auth: <bool>                   # Whether frontend needs AAD identity (default: implied true when protected != false)
+
 # Optional: resource flags (defaults to all disabled)
 resources:
   postgres:
@@ -141,7 +153,7 @@ When `protected` is `validate` or `login` (in either form), `auth` is implied `t
 - Implied `true` when `protected != false`.
 - Set explicitly to `true` if a service needs AAD identity without EasyAuth protection
   (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
-- The orchestrator skips Entra app registration entirely when no service has auth enabled.
+- The orchestrator skips Entra app registration entirely when no service or frontend has auth enabled.
 
 ### `services.<name>.volume`
 - **Optional.** Attaches a persistent volume to a service.
@@ -182,6 +194,22 @@ conn.execute("PRAGMA foreign_keys = ON")
 **Why this is safe:** The platform enforces `maxReplicas=1` when a volume is present, so there
 is never concurrent access from multiple container instances. The lockless `unix-none` VFS is
 appropriate because only one process ever writes.
+
+### `frontend.protected`
+- **Optional.** Controls authentication for the Static Web App.
+- Only `login` or `false` (not `validate` — Static Web Apps don't support the validate pattern).
+- `login` — require sign-in via `staticwebapp.config.json` route enforcement
+- `false` — no authentication required (default)
+- When `protected` is `login`, `auth` is implied `true` (Entra app registration created).
+
+### `frontend.auth`
+- **Optional.** Whether the frontend needs an AAD (Entra) identity.
+- Implied `true` when `protected != false`.
+- Set explicitly to `true` if the frontend needs MSAL.js token acquisition without route-level
+  authentication enforcement (e.g., a SPA that acquires tokens for API calls but doesn't require
+  sign-in to view the page).
+- When enabled, the orchestrator registers an Entra app and injects `AZURE_CLIENT_ID` into
+  the Static Web App environment for MSAL.js consumption.
 
 ### `resources`
 - **Optional** (all disabled by default).
@@ -283,6 +311,8 @@ frontend:
   app_location: "/"
   output_location: "dist"
   build_command: "npm run build"
+  protected: login               # require sign-in (configures staticwebapp.config.json)
+  # auth: true                   # implied by protected: login
 
 resources:
   postgres:
@@ -308,6 +338,8 @@ frontend:
   app_location: "/"
   output_location: "dist"
   build_command: "npm run build"
+  protected: false               # no auth (default) — set to "login" to require sign-in
+  # auth: true                   # set explicitly for MSAL.js token acquisition without sign-in enforcement
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -358,7 +390,7 @@ services:
 |-------------|------|
 | Services | Required: at least one service with `image`, `port` |
 | Protected | Optional per-service: `validate`, `login`, or `false` (string or object with `mode` + `exclude`) |
-| Auth | Implied when protected; Entra registration skipped when no service has auth |
+| Auth | Implied when protected; Entra registration skipped when no service or frontend has auth |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
@@ -371,6 +403,7 @@ services:
 |-------------|------|
 | Services | Required: at least one service (typically `api`) with `image`, `port` |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
+| Frontend auth | Optional: `protected` (`login` or `false`), `auth` (implied when protected) |
 | Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | GitHub repo | Frontend code must be in GitHub |
@@ -382,6 +415,7 @@ services:
 |-------------|------|
 | Backend | Not supported — no services section |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
+| Frontend auth | Optional: `protected` (`login` or `false`), `auth` (implied when protected) |
 | Resources | Not supported — no resources section |
 | GitHub repo | Frontend code must be in GitHub |
 | Serverless API | Optional via `api_location` field |
@@ -396,16 +430,17 @@ When your containers deploy, Amplifier Online **automatically injects environmen
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
 
-### Injected When Auth Is Configured (service has `protected` or `auth: true`)
+### Injected When Auth Is Configured (service or frontend has `protected` or `auth: true`)
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
 | `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend authentication |
 | `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration |
 
-**Note:** These are only injected for services that have auth enabled. When no service has
-`protected` or `auth: true`, the orchestrator skips Entra app registration entirely and these
-variables are not set.
+**Note:** These are injected for services that have auth enabled. For Static Web Apps with
+`auth: true`, `AZURE_CLIENT_ID` is injected into the SWA environment instead. When no service
+or frontend has `protected` or `auth: true`, the orchestrator skips Entra app registration
+entirely and these variables are not set.
 
 ### Always Injected (All Container Stacks)
 
@@ -551,7 +586,8 @@ Before running `amplifier-online up`, verify:
 - [ ] `stack` exactly matches output of `amplifier-online stack list`
 - [ ] All `image:` values use ACR format (`<acr>.azurecr.io/...`)
 - [ ] All `port:` values match what the application listens on
-- [ ] `protected` values are valid (shorthand: `validate`, `login`, `false`; or object with `mode` + optional `exclude`)
+- [ ] Service `protected` values are valid (shorthand: `validate`, `login`, `false`; or object with `mode` + optional `exclude`)
+- [ ] Frontend `protected` values are valid (`login` or `false`; Static Web Apps don't support `validate`)
 - [ ] For containerized deployments: images have been built and pushed to ACR
 - [ ] For containerized deployments: each container has `/health` endpoint
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`

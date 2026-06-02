@@ -129,7 +129,7 @@ of 12 turns, then summarize open questions and return.
    - Build command is specified correctly
 
 4. **Manifest review checks:** ACR image-reference format, container ports match the application,
-   `protected` values are valid (shorthand string or object form with `mode` + `exclude`), optional resource toggles
+   `protected` values are valid (shorthand string or object form with `mode` + `exclude` for services; `login` or `false` for frontend), optional resource toggles
    (`postgres`, `cosmos`, `redis`, `storage`) are intentional, and the `stack:` field matches
    what was selected.
 

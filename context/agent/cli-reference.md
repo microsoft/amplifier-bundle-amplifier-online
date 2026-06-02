@@ -139,9 +139,9 @@ amplifier-online init --stack web-app-aca  # Non-interactive: specify stack dire
 ## `amplifier-online up`
 
 Deploy the project defined in `amplifier-online.yaml`. The Provisioner Service:
-1. Creates or updates the Entra app registration (if any service has auth configured)
+1. Creates or updates the Entra app registration (if any service or frontend has auth configured)
 2. Deploys the Bicep template for the selected stack
-3. Configures EasyAuth redirect URIs (if any service has auth configured)
+3. Configures EasyAuth redirect URIs (if any service or frontend has auth configured)
 
 ```bash
 amplifier-online up            # Deploy for real

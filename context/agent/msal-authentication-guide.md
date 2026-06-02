@@ -444,6 +444,13 @@ Your containers automatically receive these authentication environment variables
 
 These are written to `/auth-config.json` by the container entrypoint for frontend consumption.
 
+**Static Web App frontends (`web-app-awa`, `static-web-app`):** When the frontend has `auth: true`
+(or `protected: login`, which implies auth), the orchestrator registers an Entra app and injects
+`AZURE_CLIENT_ID` into the Static Web App environment. Your SPA reads the client ID from the
+SWA environment rather than `/auth-config.json`. Set `protected: login` on the frontend to enforce
+sign-in via `staticwebapp.config.json` route rules; set `auth: true` alone for MSAL.js token
+acquisition without route-level sign-in enforcement.
+
 ---
 
 ## Complete Example: React App with MSAL.js
