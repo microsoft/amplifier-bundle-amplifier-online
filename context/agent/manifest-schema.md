@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, and `resources`.
+> `services`, `frontend`, and `resources`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -23,7 +23,7 @@ then edited by the developer.
 name: <project-name>          # Unique project identifier (URL-safe, lowercase, hyphens)
 stack: <stack-name>           # Which stack to deploy with (web-app-aca, web-app-awa, or static-web-app)
 
-# Services map (required for web-app-aca; at least one service)
+# Services map (required for web-app-aca and web-app-awa; at least one service)
 # Keys are service names — any name works (e.g., api, web, worker)
 services:
   <service-name>:
@@ -76,10 +76,10 @@ resources:
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
 ### `services`
-- **Required for:** `web-app-aca`
+- **Required for:** `web-app-aca` and `web-app-awa`
 - A named map of services. Keys are service names (any name works: `api`, `web`, `worker`, etc.).
 - Each service must have `image` and `port`.
-- At least one service is required for `web-app-aca`.
+- At least one service is required.
 
 ### `services.<name>.image` — ACR Format (Critical)
 
@@ -143,13 +143,13 @@ When `protected` is `validate` or `login` (in either form), `auth` is implied `t
   (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
 - The orchestrator skips Entra app registration entirely when no service has auth enabled.
 
-### `services.<name>.volume` / `backend.volume`
+### `services.<name>.volume`
 - **Optional.** Attaches a persistent volume to a service.
 - `mount_path` — path inside the container where the volume is mounted.
 - `size_gib` — size of the volume in GiB.
-- Not under `resources` — defined on the service/backend directly.
-- **Supported stacks:** `web-app-aca` (under `services.<name>.volume`) and `web-app-awa`
-  (under `backend.volume`). Not supported on `static-web-app`.
+- Not under `resources` — defined on the service directly.
+- **Supported stacks:** `web-app-aca` and `web-app-awa` (both under `services.<name>.volume`).
+  Not supported on `static-web-app`.
 - **`mount_path` constraint for `web-app-awa`:** Must start with `/mounts/` (e.g.,
   `/mounts/data`). This is an Azure Web App platform requirement. `web-app-aca` has no
   prefix restriction — any absolute path works (e.g., `/data`).
@@ -266,14 +266,49 @@ resources:
 
 ### Stack: web-app-awa (container backend + static frontend)
 
-> **Note:** The `web-app-awa` stack with a static frontend is currently in development.
-> The new `services` schema applies to `web-app-aca`. For `web-app-awa`, manifest
-> format is TBD — use `amplifier-online init --stack web-app-awa` for the current template.
+```yaml
+name: my-fullstack-app
+stack: web-app-awa
+
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-fullstack-app-api:latest
+    port: 8000
+    protected: validate
+
+frontend:
+  type: static-web-app
+  repo: https://github.com/your-org/your-repo
+  branch: main
+  app_location: "/"
+  output_location: "dist"
+  build_command: "npm run build"
+
+resources:
+  postgres:
+    enabled: true
+  cosmos:
+    enabled: false
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+```
 
 ### Stack: static-web-app (pure static site)
 
-> **Note:** The `static-web-app` stack is currently in development for the new schema.
-> Use `amplifier-online init --stack static-web-app` for the current template.
+```yaml
+name: my-static-site
+stack: static-web-app
+
+frontend:
+  type: static-web-app
+  repo: https://github.com/your-org/your-repo
+  branch: main
+  app_location: "/"
+  output_location: "dist"
+  build_command: "npm run build"
+```
 
 ### Minimal: API only (web-app-aca, single service)
 
@@ -332,26 +367,20 @@ services:
 
 ### `web-app-awa`
 
-> **In development** for the new `services` schema. Currently uses legacy format.
-> Use `amplifier-online init --stack web-app-awa` for the current template.
-
 | Requirement | Rule |
 |-------------|------|
-| Backend | Required: `image`, `port` |
+| Services | Required: at least one service (typically `api`) with `image`, `port` |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
-| Volume | Optional on backend: `mount_path` (must start with `/mounts/`), `size_gib` |
+| Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | GitHub repo | Frontend code must be in GitHub |
-| CORS | Backend must allow frontend origin |
+| CORS | API service must allow frontend origin |
 
 ### `static-web-app`
 
-> **In development** for the new `services` schema.
-> Use `amplifier-online init --stack static-web-app` for the current template.
-
 | Requirement | Rule |
 |-------------|------|
-| Backend | Not supported — no backend section |
+| Backend | Not supported — no services section |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
 | Resources | Not supported — no resources section |
 | GitHub repo | Frontend code must be in GitHub |

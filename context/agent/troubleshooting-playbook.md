@@ -383,12 +383,13 @@ mount paths that don't start with `/mounts/`.
 **Fix:**
 1. Update `mount_path` in the manifest to use the `/mounts/` prefix:
    ```yaml
-   backend:
-     image: amplifieronlinecr.azurecr.io/my-project-api:latest
-     port: 8000
-     volume:
-       mount_path: /mounts/data    # ✅ correct for web-app-awa
-       size_gib: 16
+   services:
+     api:
+       image: amplifieronlinecr.azurecr.io/my-project-api:latest
+       port: 8000
+       volume:
+         mount_path: /mounts/data    # ✅ correct for web-app-awa
+         size_gib: 16
    ```
 2. Update your application code to read/write from the new path (e.g., `/mounts/data/app.db`
    instead of `/data/app.db`).

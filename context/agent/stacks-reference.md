@@ -188,14 +188,15 @@ resources:
 name: my-project
 stack: web-app-awa       # ← must exactly match this string
 
-backend:
-  image: amplifieronlinecr.azurecr.io/my-project-api:latest
-  port: 8000
-  env:
-    - name: LOG_LEVEL
-      value: info
+services:                # ← backend container goes in services (same pattern as web-app-aca)
+  api:
+    image: amplifieronlinecr.azurecr.io/my-project-api:latest
+    port: 8000
+    env:
+      - name: LOG_LEVEL
+        value: info
 
-frontend:
+frontend:                # ← separate because Static Web App is not a container
   type: static-web-app   # ← distinguishes from container type
   repo: https://github.com/your-org/your-repo  # ← GitHub repo URL
   branch: main
@@ -221,9 +222,9 @@ resources:
 - Create React App → `build`
 
 **Key concepts:**
-- Uses `backend:` / `frontend:` keys — not the `services:` map used by `web-app-aca`.
-- Volumes are supported on the backend. Add `volume` with `mount_path` and `size_gib`
-  under `backend:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
+- Uses `services:` for the backend container (same pattern as `web-app-aca`) plus `frontend:` for the Static Web App.
+- Volumes are supported on the API service. Add `volume` with `mount_path` and `size_gib`
+  under `services.api:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
   — this is an Azure Web App platform requirement. The platform enforces single-instance
   mode when a volume is configured. If using SQLite on a volume, see the
   `services.<name>.volume` section in the manifest schema for VFS and journal mode

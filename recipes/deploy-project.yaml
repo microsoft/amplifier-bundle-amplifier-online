@@ -146,7 +146,7 @@ stages:
       IF MANIFEST EXISTS:
         - Read the manifest with read_file
         - Validate against @amplifier-online:context/agent/manifest-schema.md
-        - Check for outdated schema (e.g., uses `containers:` instead of `services:` for web-app-aca). Note: `backend:`/`frontend:` is the current schema for web-app-awa.
+        - Check for outdated schema (e.g., uses `containers:` instead of `services:`, or uses top-level `backend:` instead of `services: api:` for web-app-awa).
         - Propose fixes for any schema drift
         - Ask user: "I found an existing manifest. [Show summary]. Want to update it or keep as-is?"
       
