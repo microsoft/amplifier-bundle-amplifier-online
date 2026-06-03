@@ -146,7 +146,7 @@ of 12 turns, then summarize open questions and return.
 8. **Manifest creation MUST go through `amplifier-online init`.** Follow this workflow exactly:
 
    **When no `amplifier-online.yaml` exists:**
-   1. Run `bash('amplifier-online init --stack <stack>')` to scaffold the manifest
+   1. Run `bash('amplifier-online init --name <name> --stack <stack>')` to scaffold the manifest
    2. Read the generated file with `read_file`
    3. Explain each field to the user
    4. Use `edit_file` to apply any user-requested changes
