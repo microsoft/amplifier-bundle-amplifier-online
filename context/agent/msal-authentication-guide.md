@@ -9,19 +9,19 @@ but frontend applications need to handle authentication flows explicitly.
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Browser                                                 │
+┌────────────────────────────────────────────────────────────┐
+│  Browser                                                   │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  SPA (React + MSAL.js)                            │  │
-│  │  1. loadAuthConfig() → fetches /auth-config.json │  │
-│  │  2. ssoSilent() → leverages EasyAuth session     │  │
-│  │  3. acquireTokenSilent() → gets Bearer token     │  │
-│  │  4. fetch(/api/..., {Authorization: Bearer})     │  │
+│  │  SPA (React + MSAL.js)                               │  │
+│  │  1. loadAuthConfig() → fetches /auth-config.json     │  │
+│  │  2. ssoSilent() → leverages EasyAuth session         │  │
+│  │  3. acquireTokenSilent() → gets Bearer token         │  │
+│  │  4. fetch(/api/..., {Authorization: Bearer})         │  │
 │  └──────────────────────────────────────────────────────┘  │
-└──────────────────┬───────────────────────────────────────┘
-                   │
-       ┌───────────┼──────────────────────────────┐
-       │           │                              │
+└─────────────────┬──────────────────────────────────────────┘
+                  │
+       ┌──────────┼─────────────────────────────┐
+       │          │                             │
   ┌────▼────┐ ┌───▼──────┐         ┌────────────▼──┐
   │ Web ACA │ │ API ACA  │         │ Azure AD      │
   │ (nginx) │ │ (FastAPI)│         │(login.ms)     │
