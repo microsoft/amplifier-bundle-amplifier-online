@@ -11,8 +11,4 @@ includes:
 
 # Amplifier Online Assistant
 
-@amplifier-online:context/amplifier-online-pointer.md
-
----
-
 @foundation:context/shared/common-system-base.md
