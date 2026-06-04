@@ -438,3 +438,58 @@ stages:
     
     approval_required: true
     approval_message: "Set up CI/CD? (yes/skip)"
+
+  - name: write-deployment-context
+    description: Write project-specific deployment context into the repo's AGENTS.md
+    agent: amplifier-online:deployment-guide
+    instruction: |
+      STAGE: Write Deployment Context (Approval Gate)
+      
+      You have just completed a full deployment of this project. The key details are:
+      - Project directory: {{ project_dir }}
+      - Selected stack: {{ selected_stack }}
+      - Deployment URL: {{ deployment_url }}
+      - Deployment healthy: {{ deployment_healthy }}
+      
+      Your task is to write project-specific deployment context into the repo's AGENTS.md
+      so that a future AI session can immediately understand how to operate this deployed
+      project without re-discovering everything from scratch.
+      
+      STEP 1: Find or create the AGENTS.md file
+        Check for an existing AGENTS.md at the project root ({{ project_dir }}/AGENTS.md).
+        If not found, check {{ project_dir }}/.amplifier/AGENTS.md.
+        If neither exists, create {{ project_dir }}/.amplifier/AGENTS.md.
+      
+      STEP 2: Read the existing file content (if any)
+        If the file already contains an "Amplifier Online" section (or similar deployment
+        section), update it in place with current information. Do not duplicate.
+      
+      STEP 3: Write the deployment context
+        Ensure the file contains the following project-specific operational information
+        that answers "how do I work with this deployed project?":
+        
+        - Stack type ({{ selected_stack }}) and what that means for this repo's architecture
+        - Live deployment URL ({{ deployment_url }})
+        - Key CLI commands specific to this project: how to deploy, check status, view logs,
+          and tear down (e.g., `amplifier-online up`, `amplifier-online status`,
+          `amplifier-online logs`, `amplifier-online destroy`)
+        - CI/CD status: whether GitHub Actions workflows were set up in the previous stage
+        - Image naming convention used in this project's ACR (extracted from the manifest)
+        
+        Keep the content concise and operational. A future AI session reading this file
+        should be able to deploy an update, check health, or debug a failure without
+        consulting external documentation.
+        
+        Do NOT include: full CLI reference documentation, stack selection guidance,
+        general troubleshooting playbooks, or explanations of what Amplifier Online is.
+        Those belong in the bundle's context docs, not in the repo.
+      
+      STEP 4: Commit the change
+        Stage the file and commit with an appropriate message, e.g.:
+        ```bash
+        git add AGENTS.md .amplifier/AGENTS.md
+        git commit -m "docs: add Amplifier Online deployment context to AGENTS.md"
+        ```
+    
+    approval_required: true
+    approval_message: "Write deployment context into the repo's AGENTS.md?"

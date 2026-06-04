@@ -7,6 +7,10 @@ agents:
   include:
     - amplifier-online:deployment-guide
 
+modes:
+  include:
+    - amplifier-online:modes/amplifier-online
+
 context:
   include:
     - amplifier-online:context/amplifier-online-pointer.md
