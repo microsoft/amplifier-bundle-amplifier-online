@@ -2,6 +2,25 @@
 mode:
   name: amplifier-online
   description: Guided Amplifier Online deployment setup and management
+  tools:
+    safe:
+      - delegate
+      - recipes
+      - read_file
+      - edit_file
+      - write_file
+      - bash
+      - grep
+      - glob
+      - todo
+      - mode
+      - web_fetch
+      - LSP
+      - python_check
+      - load_skill
+      - team_knowledge
+      - terminal_inspector
+  default_action: warn
   contributes:
     context:
       - amplifier-online:context/amplifier-online-mode-context.md
