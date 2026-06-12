@@ -25,7 +25,8 @@ Match your application's architecture to a stack using these criteria:
 | Container-to-container networking | ✅ | ❌ | ❌ |
 | GitHub-integrated CI/CD for frontend | ⚠️ | ✅ | ✅ |
 | PR preview deployments | ⚠️ | ✅ | ✅ |
-| Entra ID auth (EasyAuth) | ✅ | ✅ | ✅ |
+| Entra ID auth (EasyAuth on frontends) | ✅ | ✅ | ✅ |
+| JWT middleware (API token validation) | ✅ | ✅ | ❌ |
 
 **All three stacks are production-ready and available now.**
 
@@ -63,7 +64,7 @@ Available deployment stacks:
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
 - **Networking** — automatic DNS, TLS certificates, ingress rules, container-to-container communication
-- **Authentication** — EasyAuth with Entra ID (per-project app registration)
+- **Authentication** — EasyAuth on web frontends (RedirectToLoginPage, always enforced); JWT middleware on API backends (token validation)
 - **Observability** — Application Insights (workspace-based)
 
 ### Best for
@@ -109,16 +110,15 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-project-api:latest
     port: 8000           # ← must match the port your API listens on
-    protected: validate  # ← validate (401) | login (redirect) | false (no auth)
+    # API services never get EasyAuth — validate tokens via JWT middleware
     env:
       - name: LOG_LEVEL
         value: info
   web:
     image: amplifieronlinecr.azurecr.io/my-project-web:latest
     port: 80             # ← must match the port your web server listens on
-    protected:           # ← EasyAuth forces sign-in for this service
-      mode: login
-      exclude: ["/api"]  # ← Don't intercept proxied API calls
+    # Web services always get EasyAuth (RedirectToLoginPage)
+    auth_exclude: ["/api"]  # ← Don't intercept proxied API calls
 
 resources:
   postgres:
@@ -139,8 +139,9 @@ resources:
 
 **Key concepts:**
 - Uses `services:` map — keys are service names (any name works)
-- Per-service `protected` field controls EasyAuth: `validate`, `login`, or `false` (shorthand string), or an object with `mode` + `exclude` for path exclusions
-- Per-service `auth` field (implied when protected) controls Entra identity
+- **Web services** always get EasyAuth with `RedirectToLoginPage` — use `auth_exclude` for path exclusions (e.g., proxied API calls)
+- **API services** never get EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation
+- Per-service `auth` field controls Entra identity (implied `true` for web and API roles)
 - Volumes attach per-service (not under `resources`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode). This is required for safe
   filesystem access over Azure Files (SMB). If using SQLite on a volume, see the
@@ -160,7 +161,7 @@ resources:
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
-- **Authentication:** EasyAuth with Entra ID (per-project app registration)
+- **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation)
 - **Observability:** Application Insights (workspace-based)
 
 ### Best for
@@ -192,6 +193,7 @@ services:                # ← backend container goes in services (same pattern 
   api:
     image: amplifieronlinecr.azurecr.io/my-project-api:latest
     port: 8000
+    # API service — no EasyAuth, validates tokens via JWT middleware
     env:
       - name: LOG_LEVEL
         value: info
@@ -203,8 +205,8 @@ frontend:                # ← separate because Static Web App is not a containe
   app_location: "/"              # ← path to frontend in repo (e.g., "/frontend" for monorepo)
   output_location: "dist"        # ← build output dir (must match vite/webpack config)
   build_command: "npm run build" # ← optional, defaults to "npm run build"
-  protected: login               # ← login (require sign-in) | false (no auth, default)
-  # auth: true                   # ← implied by protected: login; set explicitly for MSAL.js without sign-in enforcement
+  protected: login               # ← always enforced — sign-in required
+  # auth: true                   # ← implied by protected: login
 
 resources:
   postgres:
@@ -225,7 +227,9 @@ resources:
 
 **Key concepts:**
 - Uses `services:` for the backend container (same pattern as `web-app-aca`) plus `frontend:` for the Static Web App.
-- Frontend supports `protected` (`login` or `false`) and `auth` fields — same pattern as services, but enforced via `staticwebapp.config.json` route rules instead of EasyAuth sidecar. The orchestrator checks both services and frontend when deciding whether to create an Entra app registration.
+- **API backend** never gets EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation.
+- **SWA frontend** always gets authentication enforced via `staticwebapp.config.json` route rules (`protected: login`).
+- The orchestrator checks both services and frontend when deciding whether to create an Entra app registration.
 - Volumes are supported on the API service. Add `volume` with `mount_path` and `size_gib`
   under `services.api:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
   — this is an Azure Web App platform requirement. The platform enforces single-instance
@@ -263,7 +267,7 @@ app.add_middleware(
 
 - **Frontend:** Azure Static Web App with GitHub integration
 - **Optional serverless API:** Azure Functions (if `api_location` specified)
-- **Authentication:** EasyAuth with Entra ID (per-project app registration)
+- **Authentication:** EasyAuth with Entra ID (login always enforced via `staticwebapp.config.json` route rules)
 - **No databases:** This stack does not support PostgreSQL, Cosmos, Redis, or Storage
 
 ### Best for
@@ -303,14 +307,13 @@ frontend:
   output_location: "dist"        # ← build output directory
   build_command: "npm run build" # ← optional, defaults to "npm run build"
   api_location: "api"            # ← optional: serverless functions directory
-  protected: false               # ← login (require sign-in) | false (no auth, default)
-  # auth: true                   # ← set explicitly for MSAL.js token acquisition without sign-in enforcement
+  protected: login               # ← always enforced — sign-in required
+  # auth: true                   # ← implied by protected: login
 ```
 
-**Frontend auth options:**
-- `protected: login` — require sign-in (configures route-level auth via `staticwebapp.config.json`)
-- `protected: false` — no authentication (default)
-- `auth: true` — register Entra app and inject `AZURE_CLIENT_ID` for MSAL.js token acquisition (implied when `protected: login`)
+**Frontend auth:**
+- `protected: login` — always enforced. Sign-in required via `staticwebapp.config.json` route rules.
+- `auth: true` — implied by `protected: login`. Registers Entra app and injects `AZURE_CLIENT_ID` for MSAL.js token acquisition.
 
 ### Optional Serverless API Functions
 

@@ -1,8 +1,9 @@
 # MSAL.js Authentication Guide for Amplifier Online
 
 This guide covers implementing MSAL.js authentication for Single-Page Applications (SPAs) deployed
-via Amplifier Online. All stacks provide automatic EasyAuth configuration and Entra ID integration,
-but frontend applications need to handle authentication flows explicitly.
+via Amplifier Online. Web frontends always have EasyAuth enforced (RedirectToLoginPage), while
+API backends validate tokens via JWT middleware. Frontend applications use MSAL.js to acquire
+Bearer tokens for API calls.
 
 ---
 
@@ -25,16 +26,16 @@ but frontend applications need to handle authentication flows explicitly.
   ┌────▼────┐ ┌───▼──────┐         ┌────────────▼──┐
   │ Web ACA │ │ API ACA  │         │ Azure AD      │
   │ (nginx) │ │ (FastAPI)│         │(login.ms)     │
-  │ EasyAuth│ │ EasyAuth │         │               │
-  │ optional│ │ validates│         │               │
+  │ EasyAuth│ │ JWT      │         │               │
+  │ (login) │ │ middleware│        │               │
   └─────────┘ └──────────┘         └───────────────┘
 ```
 
 **Key points:**
-- EasyAuth handles the initial login and creates an Azure AD session
+- EasyAuth on web frontends handles the initial login and creates an Azure AD session
 - MSAL.js must use `ssoSilent()` to leverage the existing session without prompting again
 - Frontend acquires Bearer tokens via MSAL.js to call backend APIs
-- Backend validates tokens via EasyAuth (no backend code changes needed)
+- Backend validates tokens via JWT middleware (signature verification against Entra JWKS endpoint)
 
 ---
 
@@ -122,8 +123,7 @@ useEffect(() => {
 
 ## Step 4: Handle SSO Silent
 
-**This step is CRITICAL when EasyAuth is enabled on the web service** (`protected: login` or `protected: { mode: login, ... }`
-configuration in your project manifest).
+**This step is CRITICAL because EasyAuth is always enforced on web frontends** (RedirectToLoginPage).
 
 EasyAuth handles the initial login and creates an Azure AD session. MSAL.js must use `ssoSilent()`
 to silently establish an MSAL account from that existing session **without prompting the user to
@@ -163,7 +163,7 @@ export async function handleLogin() {
 - User must log in again via MSAL.js (bad UX)
 
 **With `ssoSilent()`:**
-- User logs in via EasyAuth redirect (if enabled)
+- User logs in via EasyAuth redirect (always enforced on web frontends)
 - User gets redirected back to your app
 - MSAL.js silently establishes account from existing session
 - No second login prompt (good UX)
@@ -243,131 +243,81 @@ const data = await callApi('/users/me');
 ```
 
 **Backend validation:**
-Your backend automatically validates the Bearer token via EasyAuth. No code changes needed —
-EasyAuth injects the decoded user principal in the `X-MS-CLIENT-PRINCIPAL` header.
+Your backend validates the Bearer token via JWT middleware (`jwt_middleware.py`). The middleware
+verifies the token signature against Entra's JWKS endpoint, checks audience and expiry, and
+extracts user identity (oid, name, roles, groups) from JWT claims. See the "Backend: Reading
+the Authenticated User" section below.
 
 ---
 
 ## Backend: Reading the Authenticated User
 
-EasyAuth injects the `X-MS-CLIENT-PRINCIPAL` header containing the decoded token.
-
-> **Identity key: use the `oid`, never the email.** The `oid` (Entra object ID)
-> is tenant-wide and immutable; key user records, profile bindings, and audit
-> logs off it. `preferred_username` / email and `name` are mutable display values
-> — never use them as an identity key.
->
-> **Watch the header shape.** `X-MS-CLIENT-PRINCIPAL` decodes to
-> `{"claims": [{"typ": "...", "val": "..."}, ...]}` — `claims` is a **list**, not
-> a dict, so `claims["claims"]["oid"]` is wrong (it raises `TypeError`). You must
-> iterate. Also, EasyAuth's AAD claims-mapping emits `oid` under the **long URI**
-> `http://schemas.microsoft.com/identity/claims/objectidentifier` (not a short
-> `oid`), so handle both forms. The helper below does.
->
-> The scalar headers `X-MS-CLIENT-PRINCIPAL-ID` (= the `oid`) and
-> `X-MS-CLIENT-PRINCIPAL-NAME` (a display value) are a simpler identity source
-> when you only need who-is-this. For multi-valued claims (`roles`, `groups`),
-> prefer decoding the access-token JWT from the `Authorization: Bearer` header —
-> the `X-MS-CLIENT-PRINCIPAL` JSON does not forward them reliably and its shape
-> differs across hosting models.
+The JWT middleware validates the Bearer token and makes user claims available on the request.
+API services use `jwt_middleware.py` (not EasyAuth) for token validation.
 
 ```python
-# FastAPI example
-from fastapi import Header, HTTPException
-import base64
-import json
+# FastAPI example using JWT middleware
+# The middleware validates the token and attaches claims to request.state.user
+from fastapi import Request, HTTPException
 
-# AAD's claims-mapping rewrites these short claim names to long URIs in the
-# X-MS-CLIENT-PRINCIPAL header. Accept either form.
-_OID_TYPES = ("http://schemas.microsoft.com/identity/claims/objectidentifier", "oid")
-_GROUPS_TYPES = ("http://schemas.microsoft.com/ws/2008/06/identity/claims/groups", "groups")
-
-
-def _principal_claims(x_ms_client_principal: str) -> dict[str, list[str]]:
-    """Decode X-MS-CLIENT-PRINCIPAL into {claim_type: [values]}.
-
-    `claims` is a LIST of {typ, val}; multi-valued claims (e.g. groups) appear
-    as repeated entries, so accumulate into lists.
-    """
-    decoded = base64.b64decode(x_ms_client_principal).decode("utf-8")
-    principal = json.loads(decoded)
-    out: dict[str, list[str]] = {}
-    for c in principal.get("claims", []):
-        typ, val = c.get("typ"), c.get("val")
-        if typ and val is not None:
-            out.setdefault(typ, []).append(val)
-    return out
-
-
-def _first(claims: dict[str, list[str]], types: tuple[str, ...]) -> str | None:
-    for t in types:
-        if claims.get(t):
-            return claims[t][0]
-    return None
-
-
-def get_user_identity(x_ms_client_principal: str | None = Header(None)) -> dict:
-    """Extract user identity from the EasyAuth principal header."""
-    if not x_ms_client_principal:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    claims = _principal_claims(x_ms_client_principal)
-    oid = _first(claims, _OID_TYPES)
-    if not oid:
-        raise HTTPException(status_code=401, detail="No stable identity (oid) in principal")
-
-    return {
-        "user_id": oid,  # Entra object ID — the stable identity key
-        "email": _first(claims, ("preferred_username",)),  # display only — mutable
-        "name": _first(claims, ("name",)),                 # display only
-        "groups": claims.get(_GROUPS_TYPES[0]) or claims.get(_GROUPS_TYPES[1]) or [],
-    }
-
-# Use in endpoint
 @app.get("/api/me")
-def get_current_user(x_ms_client_principal: str | None = Header(None)):
-    identity = get_user_identity(x_ms_client_principal)
-    return {"user": identity}
+def get_current_user(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    return {
+        "user": {
+            "user_id": user.oid,                    # Object ID (user's unique ID)
+            "email": user.preferred_username,        # User's email/UPN
+            "name": user.name,                       # Display name
+            "groups": user.groups,                   # Security group IDs
+            "roles": user.roles,                     # App role assignments
+        }
+    }
 ```
+
+**Setup:** Add the JWT middleware to your FastAPI app:
+```python
+from middleware.jwt_middleware import JWTAuthMiddleware
+app.add_middleware(JWTAuthMiddleware)
+```
+
+The middleware reads `AUTH_CLIENT_ID` and `AUTH_TENANT_ID` from environment variables
+(auto-injected by the platform) and validates tokens against Entra's JWKS endpoint.
 
 ---
 
 ## Group-Based Authorization
 
-**Security group memberships are included in the token** as group object IDs.
+**Security group memberships are included in the JWT token** as group object IDs.
+The JWT middleware extracts these from the token claims automatically.
 
 ```python
-# Python example
-from fastapi import Header, HTTPException
-import base64
-import json
+# Python example using JWT middleware claims
+from fastapi import Request, HTTPException
 import os
 
 # Get admin group ID from environment (set by platform admin)
 ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID")  # Ask your platform admin for this value
 
 def require_group(required_group_id: str):
-    """Decorator to require group membership."""
-    def decorator(func):
-        async def wrapper(x_ms_client_principal: str | None = Header(None), *args, **kwargs):
-            if not x_ms_client_principal:
-                raise HTTPException(status_code=401, detail="Not authenticated")
-
-            # Reuse the identity helper above — it parses the principal's claims
-            # LIST correctly and normalizes the long-URI group claim type.
-            user_groups = get_user_identity(x_ms_client_principal)["groups"]
-
-            if required_group_id not in user_groups:
-                raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-            return await func(*args, **kwargs)
-        return wrapper
-    return decorator
+    """Dependency to require group membership via JWT claims."""
+    def checker(request: Request):
+        user = getattr(request.state, "user", None)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        if required_group_id not in user.groups:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        
+        return user
+    return checker
 
 # Use in endpoint
 @app.post("/api/admin/delete-user")
-@require_group(ADMIN_GROUP_ID)
-async def delete_user(user_id: str):
+async def delete_user(user_id: str, request: Request):
+    require_group(ADMIN_GROUP_ID)(request)
     # Only members of ADMIN_GROUP_ID can call this
     return {"deleted": user_id}
 ```
@@ -494,12 +444,13 @@ Your containers automatically receive these authentication environment variables
 
 These are written to `/auth-config.json` by the container entrypoint for frontend consumption.
 
-**Static Web App frontends (`web-app-awa`, `static-web-app`):** When the frontend has `auth: true`
-(or `protected: login`, which implies auth), the orchestrator registers an Entra app and injects
-`AZURE_CLIENT_ID` into the Static Web App environment. Your SPA reads the client ID from the
-SWA environment rather than `/auth-config.json`. Set `protected: login` on the frontend to enforce
-sign-in via `staticwebapp.config.json` route rules; set `auth: true` alone for MSAL.js token
-acquisition without route-level sign-in enforcement.
+**Static Web App frontends (`web-app-awa`, `static-web-app`):** Frontends always have
+`protected: login` enforced, which implies `auth: true`. The orchestrator registers an Entra
+app and injects `AZURE_CLIENT_ID` into the Static Web App environment. Your SPA reads the
+client ID from the SWA environment rather than `/auth-config.json`.
+
+**API services:** Use `AUTH_CLIENT_ID` to configure the JWT middleware audience
+(`api://{AUTH_CLIENT_ID}`) and `AUTH_TENANT_ID` to derive the JWKS endpoint URL.
 
 > **Note:** This `AZURE_CLIENT_ID` is the **per-project Entra app registration** used by
 > MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
