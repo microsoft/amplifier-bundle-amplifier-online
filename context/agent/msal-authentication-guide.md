@@ -452,6 +452,11 @@ client ID from the SWA environment rather than `/auth-config.json`.
 **API services:** Use `AUTH_CLIENT_ID` to configure the JWT middleware audience
 (`api://{AUTH_CLIENT_ID}`) and `AUTH_TENANT_ID` to derive the JWKS endpoint URL.
 
+> **Note:** This `AZURE_CLIENT_ID` is the **per-project Entra app registration** used by
+> MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
+> do not use `AZURE_CLIENT_ID` — they authenticate via GitHub Actions OIDC tokens validated
+> directly by the provisioner. See the [CI/CD Guide](cicd-guide.md) for details.
+
 ---
 
 ## Complete Example: React App with MSAL.js
