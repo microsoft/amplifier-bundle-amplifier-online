@@ -501,6 +501,11 @@ SWA environment rather than `/auth-config.json`. Set `protected: login` on the f
 sign-in via `staticwebapp.config.json` route rules; set `auth: true` alone for MSAL.js token
 acquisition without route-level sign-in enforcement.
 
+> **Note:** This `AZURE_CLIENT_ID` is the **per-project Entra app registration** used by
+> MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
+> do not use `AZURE_CLIENT_ID` — they authenticate via GitHub Actions OIDC tokens validated
+> directly by the provisioner. See the [CI/CD Guide](cicd-guide.md) for details.
+
 ---
 
 ## Complete Example: React App with MSAL.js
