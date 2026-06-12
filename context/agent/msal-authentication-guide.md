@@ -250,7 +250,26 @@ EasyAuth injects the decoded user principal in the `X-MS-CLIENT-PRINCIPAL` heade
 
 ## Backend: Reading the Authenticated User
 
-EasyAuth injects the `X-MS-CLIENT-PRINCIPAL` header containing the decoded token:
+EasyAuth injects the `X-MS-CLIENT-PRINCIPAL` header containing the decoded token.
+
+> **Identity key: use the `oid`, never the email.** The `oid` (Entra object ID)
+> is tenant-wide and immutable; key user records, profile bindings, and audit
+> logs off it. `preferred_username` / email and `name` are mutable display values
+> — never use them as an identity key.
+>
+> **Watch the header shape.** `X-MS-CLIENT-PRINCIPAL` decodes to
+> `{"claims": [{"typ": "...", "val": "..."}, ...]}` — `claims` is a **list**, not
+> a dict, so `claims["claims"]["oid"]` is wrong (it raises `TypeError`). You must
+> iterate. Also, EasyAuth's AAD claims-mapping emits `oid` under the **long URI**
+> `http://schemas.microsoft.com/identity/claims/objectidentifier` (not a short
+> `oid`), so handle both forms. The helper below does.
+>
+> The scalar headers `X-MS-CLIENT-PRINCIPAL-ID` (= the `oid`) and
+> `X-MS-CLIENT-PRINCIPAL-NAME` (a display value) are a simpler identity source
+> when you only need who-is-this. For multi-valued claims (`roles`, `groups`),
+> prefer decoding the access-token JWT from the `Authorization: Bearer` header —
+> the `X-MS-CLIENT-PRINCIPAL` JSON does not forward them reliably and its shape
+> differs across hosting models.
 
 ```python
 # FastAPI example
@@ -258,19 +277,50 @@ from fastapi import Header, HTTPException
 import base64
 import json
 
+# AAD's claims-mapping rewrites these short claim names to long URIs in the
+# X-MS-CLIENT-PRINCIPAL header. Accept either form.
+_OID_TYPES = ("http://schemas.microsoft.com/identity/claims/objectidentifier", "oid")
+_GROUPS_TYPES = ("http://schemas.microsoft.com/ws/2008/06/identity/claims/groups", "groups")
+
+
+def _principal_claims(x_ms_client_principal: str) -> dict[str, list[str]]:
+    """Decode X-MS-CLIENT-PRINCIPAL into {claim_type: [values]}.
+
+    `claims` is a LIST of {typ, val}; multi-valued claims (e.g. groups) appear
+    as repeated entries, so accumulate into lists.
+    """
+    decoded = base64.b64decode(x_ms_client_principal).decode("utf-8")
+    principal = json.loads(decoded)
+    out: dict[str, list[str]] = {}
+    for c in principal.get("claims", []):
+        typ, val = c.get("typ"), c.get("val")
+        if typ and val is not None:
+            out.setdefault(typ, []).append(val)
+    return out
+
+
+def _first(claims: dict[str, list[str]], types: tuple[str, ...]) -> str | None:
+    for t in types:
+        if claims.get(t):
+            return claims[t][0]
+    return None
+
+
 def get_user_identity(x_ms_client_principal: str | None = Header(None)) -> dict:
-    """Extract user identity from EasyAuth header."""
+    """Extract user identity from the EasyAuth principal header."""
     if not x_ms_client_principal:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    decoded = base64.b64decode(x_ms_client_principal).decode("utf-8")
-    claims = json.loads(decoded)
-    
+
+    claims = _principal_claims(x_ms_client_principal)
+    oid = _first(claims, _OID_TYPES)
+    if not oid:
+        raise HTTPException(status_code=401, detail="No stable identity (oid) in principal")
+
     return {
-        "user_id": claims["claims"]["oid"],  # Object ID (user's unique ID)
-        "email": claims["claims"]["preferred_username"],
-        "name": claims["claims"]["name"],
-        "groups": claims["claims"].get("groups", []),  # Security group IDs
+        "user_id": oid,  # Entra object ID — the stable identity key
+        "email": _first(claims, ("preferred_username",)),  # display only — mutable
+        "name": _first(claims, ("name",)),                 # display only
+        "groups": claims.get(_GROUPS_TYPES[0]) or claims.get(_GROUPS_TYPES[1]) or [],
     }
 
 # Use in endpoint
@@ -302,14 +352,14 @@ def require_group(required_group_id: str):
         async def wrapper(x_ms_client_principal: str | None = Header(None), *args, **kwargs):
             if not x_ms_client_principal:
                 raise HTTPException(status_code=401, detail="Not authenticated")
-            
-            decoded = base64.b64decode(x_ms_client_principal).decode("utf-8")
-            claims = json.loads(decoded)
-            user_groups = claims["claims"].get("groups", [])
-            
+
+            # Reuse the identity helper above — it parses the principal's claims
+            # LIST correctly and normalizes the long-URI group claim type.
+            user_groups = get_user_identity(x_ms_client_principal)["groups"]
+
             if required_group_id not in user_groups:
                 raise HTTPException(status_code=403, detail="Insufficient permissions")
-            
+
             return await func(*args, **kwargs)
         return wrapper
     return decorator
@@ -450,6 +500,11 @@ These are written to `/auth-config.json` by the container entrypoint for fronten
 SWA environment rather than `/auth-config.json`. Set `protected: login` on the frontend to enforce
 sign-in via `staticwebapp.config.json` route rules; set `auth: true` alone for MSAL.js token
 acquisition without route-level sign-in enforcement.
+
+> **Note:** This `AZURE_CLIENT_ID` is the **per-project Entra app registration** used by
+> MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
+> do not use `AZURE_CLIENT_ID` — they authenticate via GitHub Actions OIDC tokens validated
+> directly by the provisioner. See the [CI/CD Guide](cicd-guide.md) for details.
 
 ---
 
