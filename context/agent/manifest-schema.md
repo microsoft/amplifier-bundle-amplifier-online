@@ -29,12 +29,12 @@ services:
   <service-name>:
     image: <acr-image>        # ACR image URI (required)
     port: <port-number>       # Port your service listens on (integer, required)
-    protected: <mode>         # Shorthand: validate | login | false (default: false)
-    # — OR object form —
-    # protected:
-    #   mode: <mode>           # validate | login | false
-    #   exclude: [<paths>]     # Path prefixes where EasyAuth is bypassed (e.g., ["/api"])
-    auth: <bool>              # Whether service needs AAD identity (default: implied true when protected != false)
+    role: <web|api|worker>    # Service role (web = browser-facing, api = backend API, worker = background)
+    # Web services (role: web) automatically get EasyAuth (RedirectToLoginPage) — no opt-out.
+    # API services (role: api) never get EasyAuth — use JWT middleware for token validation.
+    # The 'protected' field is DEPRECATED — auth is determined by the service role.
+    auth_exclude: [<paths>]   # (web services only) Path prefixes excluded from EasyAuth (e.g., ["/api"])
+    auth: <bool>              # Whether service needs AAD identity (default: true for web/api roles)
     env:                      # Optional environment variables
       - name: <env-var-name>
         value: <env-var-value>
@@ -51,8 +51,8 @@ frontend:
   output_location: <path>
   build_command: <command>
   api_location: <path>           # Optional: serverless functions directory (static-web-app only)
-  protected: <mode>              # login | false (default: false) — controls SWA route-level auth
-  auth: <bool>                   # Whether frontend needs AAD identity (default: implied true when protected != false)
+  protected: login               # Always 'login' — SWA frontends always require sign-in
+  auth: <bool>                   # Whether frontend needs AAD identity (default: true when protected is set)
 
 # Optional: resource flags (defaults to all disabled)
 resources:
@@ -124,34 +124,42 @@ build images — it deploys whatever tag is currently in the registry.
   - Nginx (static): `80`
 - ❌ Wrong port is a common failure mode: app runs but health checks fail
 
-### `services.<name>.protected`
-- **Optional.** Controls EasyAuth protection mode for the service.
-- Accepts a **shorthand string** or an **object form**.
+### `services.<name>.protected` (DEPRECATED)
 
-**Shorthand** (string value):
-- `validate` — EasyAuth returns 401 for unauthenticated requests (API pattern: caller supplies token)
-- `login` — EasyAuth redirects unauthenticated users to login page (web frontend pattern)
-- `false` — No authentication required (default)
+> **Deprecated.** The `protected` field is deprecated. Authentication is now determined by the
+> service's role in the architecture:
+> - **Web/frontend services** always get EasyAuth with `RedirectToLoginPage` — no opt-out.
+> - **API/backend services** never get EasyAuth — they validate tokens via JWT middleware.
+>
+> Existing manifests with `protected` will still parse, but the field is ignored for API services
+> and redundant for web services (which always get EasyAuth). Migrate to the new model by removing
+> `protected` from all services.
 
-**Object form** (when you need path exclusions):
-```yaml
-protected:
-  mode: validate   # or login / false — same values as shorthand
-  exclude: ["/api", "/webhooks"]   # path prefixes where EasyAuth is bypassed
-```
-- `mode` — required, same values as the shorthand string.
-- `exclude` — optional list of path prefixes. Requests matching these prefixes skip EasyAuth
-  enforcement entirely. Use this when a frontend proxies API calls through the same hostname —
-  without exclusion, EasyAuth intercepts those paths and issues a login redirect that `fetch()`
-  cannot follow.
+**Legacy values (for reference only):**
+- `validate` — **Removed.** API services no longer use EasyAuth. Use JWT middleware instead.
+- `login` — **Redundant for web services.** Web services always get EasyAuth with `RedirectToLoginPage`.
+- `false` — **Default for API services.** API services never get EasyAuth.
+
+### `services.<name>.auth_exclude`
+- **Optional.** Only applies to **web/frontend services** (services that get EasyAuth).
+- A list of path prefixes where EasyAuth is bypassed. Requests matching these prefixes skip
+  EasyAuth enforcement entirely.
+- Use this when a frontend proxies API calls through the same hostname — without exclusion,
+  EasyAuth intercepts those paths and issues a login redirect that `fetch()` cannot follow.
 - `/health` is always excluded by the platform — you do not need to list it.
 
-When `protected` is `validate` or `login` (in either form), `auth` is implied `true` (AAD identity provisioned).
+```yaml
+services:
+  web:
+    image: amplifieronlinecr.azurecr.io/my-project-web:latest
+    port: 80
+    auth_exclude: ["/api", "/webhooks"]   # EasyAuth skips these path prefixes
+```
 
 ### `services.<name>.auth`
 - **Optional.** Whether the service needs an AAD (Entra) identity.
-- Implied `true` when `protected != false`.
-- Set explicitly to `true` if a service needs AAD identity without EasyAuth protection
+- Implied `true` for web and API services (both need an Entra app registration).
+- Set explicitly to `true` if a worker service needs AAD identity
   (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
 - The orchestrator skips Entra app registration entirely when no service or frontend has auth enabled.
 
@@ -196,11 +204,10 @@ is never concurrent access from multiple container instances. The lockless `unix
 appropriate because only one process ever writes.
 
 ### `frontend.protected`
-- **Optional.** Controls authentication for the Static Web App.
-- Only `login` or `false` (not `validate` — Static Web Apps don't support the validate pattern).
+- **Always `login`.** All browser-facing frontends require sign-in — this is enforced by the platform.
 - `login` — require sign-in via `staticwebapp.config.json` route enforcement
-- `false` — no authentication required (default)
 - When `protected` is `login`, `auth` is implied `true` (Entra app registration created).
+- Setting `protected: false` on a frontend is deprecated and will be rejected in a future release.
 
 ### `frontend.auth`
 - **Optional.** Whether the frontend needs an AAD (Entra) identity.
@@ -240,16 +247,15 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-project-api:latest
     port: 8000
-    protected: validate
+    # API services never get EasyAuth — use JWT middleware for token validation
     env:
       - name: LOG_LEVEL
         value: info
   web:
     image: amplifieronlinecr.azurecr.io/my-project-web:latest
     port: 80
-    protected:
-      mode: login
-      exclude: ["/api"]   # Don't intercept proxied API calls
+    # Web services always get EasyAuth (RedirectToLoginPage)
+    auth_exclude: ["/api"]   # Don't intercept proxied API calls
 
 resources:
   postgres:
@@ -275,17 +281,15 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/data-service-api:latest
     port: 8000
-    protected: validate
-    auth: true
+    # API service — no EasyAuth, uses JWT middleware for token validation
     volume:
       mount_path: /data
       size_gib: 16
   web:
     image: amplifieronlinecr.azurecr.io/data-service-web:latest
     port: 3000
-    protected:
-      mode: login
-      exclude: ["/api"]
+    # Web service — always gets EasyAuth (RedirectToLoginPage)
+    auth_exclude: ["/api"]
 
 resources:
   postgres:
@@ -302,7 +306,7 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-fullstack-app-api:latest
     port: 8000
-    protected: validate
+    # API service — no EasyAuth, uses JWT middleware for token validation
 
 frontend:
   type: static-web-app
@@ -311,7 +315,7 @@ frontend:
   app_location: "/"
   output_location: "dist"
   build_command: "npm run build"
-  protected: login               # require sign-in (configures staticwebapp.config.json)
+  protected: login               # always enforced — require sign-in
   # auth: true                   # implied by protected: login
 
 resources:
@@ -338,8 +342,8 @@ frontend:
   app_location: "/"
   output_location: "dist"
   build_command: "npm run build"
-  protected: false               # no auth (default) — set to "login" to require sign-in
-  # auth: true                   # set explicitly for MSAL.js token acquisition without sign-in enforcement
+  protected: login               # always enforced — require sign-in
+  # auth: true                   # implied by protected: login
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -352,6 +356,7 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-api:latest
     port: 8000
+    # API service — validates tokens via JWT middleware (no EasyAuth)
 
 # No other services — single-service deployment
 
@@ -376,8 +381,8 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/public-api:latest
     port: 8000
-    # protected defaults to false — no EasyAuth
-    # No Entra app registration created
+    auth: false              # Explicitly opt out of AAD identity
+    # No EasyAuth, no JWT middleware, no Entra app registration
 ```
 
 ---
@@ -389,8 +394,9 @@ services:
 | Requirement | Rule |
 |-------------|------|
 | Services | Required: at least one service with `image`, `port` |
-| Protected | Optional per-service: `validate`, `login`, or `false` (string or object with `mode` + `exclude`) |
-| Auth | Implied when protected; Entra registration skipped when no service or frontend has auth |
+| Web service auth | Always gets EasyAuth (`RedirectToLoginPage`). Use `auth_exclude` for path exclusions. |
+| API service auth | Never gets EasyAuth. Use JWT middleware (`jwt_middleware.py`) for token validation. |
+| Auth | Entra registration created when any service has auth enabled (default for web/api roles) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
@@ -402,8 +408,9 @@ services:
 | Requirement | Rule |
 |-------------|------|
 | Services | Required: at least one service (typically `api`) with `image`, `port` |
+| API service auth | Never gets EasyAuth. Use JWT middleware (`jwt_middleware.py`) for token validation. |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
-| Frontend auth | Optional: `protected` (`login` or `false`), `auth` (implied when protected) |
+| Frontend auth | Always enforced: `protected: login` (sign-in required via `staticwebapp.config.json`) |
 | Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage |
 | GitHub repo | Frontend code must be in GitHub |
@@ -415,7 +422,7 @@ services:
 |-------------|------|
 | Backend | Not supported — no services section |
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
-| Frontend auth | Optional: `protected` (`login` or `false`), `auth` (implied when protected) |
+| Frontend auth | Always enforced: `protected: login` (sign-in required via `staticwebapp.config.json`) |
 | Resources | Not supported — no resources section |
 | GitHub repo | Frontend code must be in GitHub |
 | Serverless API | Optional via `api_location` field |
@@ -430,17 +437,19 @@ When your containers deploy, Amplifier Online **automatically injects environmen
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
 
-### Injected When Auth Is Configured (service or frontend has `protected` or `auth: true`)
+### Injected When Auth Is Configured (any service or frontend has auth enabled)
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend authentication |
-| `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration |
+| `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend auth, JWT middleware audience validation |
+| `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration, JWT middleware JWKS endpoint |
 
-**Note:** These are injected for services that have auth enabled. For Static Web Apps with
-`auth: true`, `AZURE_CLIENT_ID` is injected into the SWA environment instead. When no service
-or frontend has `protected` or `auth: true`, the orchestrator skips Entra app registration
-entirely and these variables are not set.
+**Note:** These are injected for all services that have auth enabled. Web services use them for
+EasyAuth configuration. API services use them for JWT middleware configuration (audience =
+`api://{AUTH_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AUTH_TENANT_ID}/...`).
+For Static Web Apps with `auth: true`, `AZURE_CLIENT_ID` is injected into the SWA environment
+instead. When no service or frontend has auth enabled, the orchestrator skips Entra app
+registration entirely and these variables are not set.
 
 ### Always Injected (All Container Stacks)
 
@@ -586,8 +595,9 @@ Before running `amplifier-online up`, verify:
 - [ ] `stack` exactly matches output of `amplifier-online stack list`
 - [ ] All `image:` values use ACR format (`<acr>.azurecr.io/...`)
 - [ ] All `port:` values match what the application listens on
-- [ ] Service `protected` values are valid (shorthand: `validate`, `login`, `false`; or object with `mode` + optional `exclude`)
-- [ ] Frontend `protected` values are valid (`login` or `false`; Static Web Apps don't support `validate`)
+- [ ] Web/frontend services have `auth_exclude` configured if they proxy API calls (e.g., `["/api"]`)
+- [ ] API services do NOT have `protected` set (deprecated — APIs use JWT middleware, not EasyAuth)
+- [ ] Frontend `protected` is set to `login` (always enforced for browser-facing frontends)
 - [ ] For containerized deployments: images have been built and pushed to ACR
 - [ ] For containerized deployments: each container has `/health` endpoint
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`

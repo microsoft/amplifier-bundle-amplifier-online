@@ -144,18 +144,21 @@ amplifier-online config
 
 ---
 
-## Failure Mode 5: EasyAuth / Entra ID Misconfiguration
+## Failure Mode 5: EasyAuth / Entra ID Misconfiguration (Web Frontends)
 
-**Symptom:** App deploys and runs but returns 401 Unauthorized or redirect loops:
+**Symptom:** Web frontend deploys and runs but returns redirect loops or users can't sign in:
 ```
-HTTP 401 - Unauthorized
 Redirect loop: app → AAD → app → AAD...
 Error creating app registration: insufficient permissions
 ```
 
+**Note:** EasyAuth is only deployed on web/frontend services (RedirectToLoginPage). API/backend
+services never have EasyAuth — they use JWT middleware for token validation. If your API returns
+401, see Failure Mode 14 (JWT middleware not configured).
+
 **Diagnostic:**
 ```bash
-amplifier-online logs --container api    # Look for auth-related errors
+amplifier-online logs --container web    # Look for auth-related errors on the web frontend
 amplifier-online status                  # Check if container apps are running
 ```
 
@@ -277,28 +280,26 @@ amplifier-online logs --container web    # Look for 302 responses on /api/* path
 # In browser DevTools → Network tab: check if /api/* requests get a 302 to login.microsoftonline.com
 ```
 
-**Root cause:** EasyAuth is enabled on the web service with `protected: login`, which enforces
-authentication on **all** paths — including `/api/...` paths that the frontend proxies to the
-API service. When the browser's `fetch()` hits EasyAuth on a proxied path, EasyAuth returns a
-302 redirect to the login page. `fetch()` cannot follow cross-origin auth redirects, so the
-call fails.
+**Root cause:** EasyAuth is always enabled on web services with `RedirectToLoginPage`, which
+enforces authentication on **all** paths — including `/api/...` paths that the frontend proxies
+to the API service. When the browser's `fetch()` hits EasyAuth on a proxied path, EasyAuth
+returns a 302 redirect to the login page. `fetch()` cannot follow cross-origin auth redirects,
+so the call fails.
 
 **Fix:**
 
-Add `exclude` to the web service's `protected` config to bypass EasyAuth on the proxied paths:
+Add `auth_exclude` to the web service to bypass EasyAuth on the proxied paths:
 
 ```yaml
 services:
   web:
     image: amplifieronlinecr.azurecr.io/my-project-web:latest
     port: 80
-    protected:
-      mode: login
-      exclude: ["/api"]      # ← EasyAuth skips /api/* paths; proxy forwards them directly
+    auth_exclude: ["/api"]      # ← EasyAuth skips /api/* paths; proxy forwards them directly
   api:
     image: amplifieronlinecr.azurecr.io/my-project-api:latest
     port: 8000
-    protected: validate      # ← The API service still enforces auth via token validation
+    # API service validates tokens via JWT middleware (no EasyAuth)
 ```
 
 Then redeploy:
@@ -306,10 +307,10 @@ Then redeploy:
 amplifier-online up
 ```
 
-**Key insight:** The API service has its own `protected: validate` enforcement, so the
-excluded paths are still authenticated — just by the API service (via token) rather than by
-EasyAuth on the web service (via redirect). The `exclude` field only removes the web service's
-EasyAuth gate on those path prefixes.
+**Key insight:** The API service validates tokens via JWT middleware, so the excluded paths are
+still authenticated — just by the API service (via JWT middleware) rather than by EasyAuth on
+the web service (via redirect). The `auth_exclude` field only removes the web service's EasyAuth
+gate on those path prefixes.
 
 ---
 
@@ -396,6 +397,72 @@ mount paths that don't start with `/mounts/`.
 3. Re-run `amplifier-online up`.
 
 ---
+
+## Failure Mode 14: JWT Middleware Not Configured on API Service
+
+**Symptom:** API service returns 401 Unauthorized for all requests, even with a valid Bearer token,
+or returns 500 Internal Server Error with JWT-related errors in logs:
+```
+HTTP 401 - Unauthorized (on every API call with a Bearer token)
+HTTP 500 - jwt_middleware: JWKS endpoint not configured
+KeyError: 'AUTH_CLIENT_ID' or 'AUTH_TENANT_ID'
+```
+
+Alternatively, the API accepts all requests without authentication (no middleware at all).
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container api    # Look for JWT validation errors or missing env vars
+# Check if jwt_middleware.py is present in the API container's code
+# Check if the middleware is registered in the FastAPI app
+```
+
+**Root cause:** API/backend services no longer use EasyAuth for token validation. They must
+include the JWT middleware (`jwt_middleware.py`) to validate Bearer tokens from MSAL.js frontends.
+Common causes:
+
+1. **Middleware not installed:** The `jwt_middleware.py` template was not added to the API service.
+2. **Middleware not registered:** The middleware file exists but is not registered in the FastAPI app.
+3. **Missing environment variables:** `AUTH_CLIENT_ID` or `AUTH_TENANT_ID` not available (auth
+   not enabled for the service in the manifest).
+4. **Missing dependency:** The `PyJWT` and `cryptography` packages are not in the container's
+   `requirements.txt`.
+
+**Fix:**
+
+1. Copy the JWT middleware template into your API service:
+   ```bash
+   cp amplifier-online/templates/jwt_middleware.py ./your-api-service/middleware/
+   ```
+
+2. Register the middleware in your FastAPI app:
+   ```python
+   from middleware.jwt_middleware import JWTAuthMiddleware
+   app.add_middleware(JWTAuthMiddleware)
+   ```
+
+3. Add required dependencies to `requirements.txt`:
+   ```
+   PyJWT>=2.8.0
+   cryptography>=41.0.0
+   ```
+
+4. Ensure the service has `auth: true` in the manifest (default for API services) so that
+   `AUTH_CLIENT_ID` and `AUTH_TENANT_ID` environment variables are injected.
+
+5. Rebuild, push, and redeploy:
+   ```bash
+   docker build -t amplifieronlinecr.azurecr.io/<project>-api:latest ./api/
+   docker push amplifieronlinecr.azurecr.io/<project>-api:latest
+   amplifier-online up
+   ```
+
+**Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
+API service's responsibility via JWT middleware. The middleware validates signatures against
+Entra's JWKS endpoint, checks audience (`api://{AUTH_CLIENT_ID}`), issuer, and expiry, and
+extracts user identity from JWT claims.
+
+---
 ## Diagnostic Commands Quick Reference
 
 ```bash
@@ -425,13 +492,18 @@ User is authenticated but not authorized
 
 **Diagnostic:**
 ```bash
-amplifier-online logs --container api    # Look for "user not in authorized group" errors
+amplifier-online logs --container web    # Look for "user not in authorized group" errors on web frontend
+amplifier-online logs --container api    # Look for 403 errors in JWT middleware on API backend
 # Check if the user is in a nested group (group-within-a-group)
 ```
 
-**Root cause:** Azure Container Apps EasyAuth does not support **nested group membership**.
-If a user is in GroupB, and GroupB is a member of GroupA, and the manifest lists GroupA as
-the allowed group, EasyAuth will NOT recognize the user as authorized. Only direct membership works.
+**Root cause:** Neither EasyAuth (on web frontends) nor Entra JWT tokens support **nested group
+membership**. If a user is in GroupB, and GroupB is a member of GroupA, and the app checks for
+GroupA membership, the user will NOT be recognized as authorized. Only direct membership works.
+
+This affects:
+- **Web frontends:** EasyAuth's group claim doesn't include nested groups.
+- **API backends:** The JWT `groups` claim doesn't include nested groups either.
 
 **Fix:**
 1. Verify group membership structure:
@@ -448,16 +520,18 @@ the allowed group, EasyAuth will NOT recognize the user as authorized. Only dire
    # Update admin_group / user_group to a group with only direct members
    ```
 
-4. Re-run `amplifier-online up` to update EasyAuth configuration
+4. Re-run `amplifier-online up` to update configuration
 
 **Note:** This is an Azure platform limitation, not an Amplifier Online bug. Nested groups do
-not work with Container Apps EasyAuth or Static Web Apps authentication.
+not work with EasyAuth, Static Web Apps authentication, or JWT group claims.
 
 ---
 
-## Failure Mode 10: Custom Health Path Returns 401 (EasyAuth Blocks It)
+## Failure Mode 10: Custom Health Path Returns 401 (EasyAuth Blocks It on Web Services)
 
-**Symptom:** Deployment completes but Container App shows unhealthy, or Azure health probes fail:
+**Applies to:** Web/frontend services only. API/backend services do not have EasyAuth.
+
+**Symptom:** Deployment completes but the web Container App shows unhealthy, or Azure health probes fail:
 ```
 Health probe failed: GET /healthz returned 401 Unauthorized
 Container app revision failing: health check timeout
@@ -465,39 +539,38 @@ amplifier-online status shows: Revision: Failed
 ```
 
 **Note:** The platform automatically excludes `/health` from EasyAuth enforcement. This failure
-mode only applies if your app uses a **custom health path** (e.g., `/healthz`, `/ready`) that
-is not auto-excluded.
+mode only applies if your **web service** uses a **custom health path** (e.g., `/healthz`,
+`/ready`) that is not auto-excluded. API services are unaffected because they do not have
+EasyAuth.
 
 **Diagnostic:**
 ```bash
-amplifier-online logs --container api    # Look for repeated health probe requests
+amplifier-online logs --container web    # Look for repeated health probe requests on web service
 amplifier-online status                  # Check revision status
 curl https://<app-url>/healthz           # Test from outside (will 401 if not excluded)
 ```
 
-**Root cause:** EasyAuth is enabled on the Container App and your custom health path is not in
-the excluded paths list. Azure's health probe doesn't send auth tokens, so it gets a 401 and
-marks the container as unhealthy. The standard `/health` path is always excluded automatically,
-but custom paths are not.
+**Root cause:** EasyAuth is enabled on the web service (always enforced for frontends) and your
+custom health path is not in the excluded paths list. Azure's health probe doesn't send auth
+tokens, so it gets a 401 and marks the container as unhealthy. The standard `/health` path is
+always excluded automatically, but custom paths are not.
 
-**Fix:** Add your custom health path to the service's `exclude` list:
+**Fix:** Add your custom health path to the web service's `auth_exclude` list:
 ```yaml
 services:
-  api:
-    image: amplifieronlinecr.azurecr.io/my-project-api:latest
-    port: 8000
-    protected:
-      mode: validate
-      exclude: ["/healthz", "/ready"]    # Add custom health paths here
+  web:
+    image: amplifieronlinecr.azurecr.io/my-project-web:latest
+    port: 80
+    auth_exclude: ["/healthz", "/ready"]    # Add custom health paths here
 ```
 
 **Key insight:** `/health` is auto-excluded by the platform — you never need to list it. But if
-your app uses a non-standard health path, you must explicitly exclude it.
+your web service uses a non-standard health path, you must explicitly exclude it. This does not
+apply to API services, which do not have EasyAuth.
 
 **After fixing:**
-1. Rebuild and push the updated container image
-2. Re-run `amplifier-online up`
-3. Verify with `amplifier-online status` — revision should show "Running"
+1. Re-run `amplifier-online up`
+2. Verify with `amplifier-online status` — revision should show "Running"
 
 ---
 
