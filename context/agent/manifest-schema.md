@@ -21,9 +21,9 @@ then edited by the developer.
 ```yaml
 # Required fields
 name: <project-name>          # Unique project identifier (URL-safe, lowercase, hyphens)
-stack: <stack-name>           # Which stack to deploy with (web-app-aca, web-app-awa, or static-web-app)
+stack: <stack-name>           # Which stack to deploy with (web-app-aca, internal-service-aca, web-app-awa, or static-web-app)
 
-# Services map (required for web-app-aca and web-app-awa; at least one service)
+# Services map (required for web-app-aca, internal-service-aca, and web-app-awa; at least one service)
 # Keys are service names — any name works (e.g., api, web, worker)
 services:
   <service-name>:
@@ -84,11 +84,11 @@ resources:
 
 ### `stack`
 - **Required.** Must exactly match a stack name returned by `amplifier-online stack list`.
-- Current valid values: `web-app-aca`, `web-app-awa`, `static-web-app`
+- Current valid values: `web-app-aca`, `internal-service-aca`, `web-app-awa`, `static-web-app`
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
 ### `services`
-- **Required for:** `web-app-aca` and `web-app-awa`
+- **Required for:** `web-app-aca`, `internal-service-aca`, and `web-app-awa`
 - A named map of services. Keys are service names (any name works: `api`, `web`, `worker`, etc.).
 - Each service must have `image` and `port`.
 - At least one service is required.
@@ -168,7 +168,7 @@ services:
 - `mount_path` — path inside the container where the volume is mounted.
 - `size_gib` — size of the volume in GiB.
 - Not under `resources` — defined on the service directly.
-- **Supported stacks:** `web-app-aca` and `web-app-awa` (both under `services.<name>.volume`).
+- **Supported stacks:** `web-app-aca`, `internal-service-aca`, and `web-app-awa` (all under `services.<name>.volume`).
   Not supported on `static-web-app`.
 - **`mount_path` constraint for `web-app-awa`:** Must start with `/mounts/` (e.g.,
   `/mounts/data`). This is an Azure Web App platform requirement. `web-app-aca` has no
@@ -220,7 +220,7 @@ appropriate because only one process ever writes.
 
 ### `resources`
 - **Optional** (all disabled by default).
-- **Not supported for:** `static-web-app` stack
+- **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, and `web-app-awa`)
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
 - **postgres**: Adds a database and user on the shared PostgreSQL server; connection string
   injected as `DATABASE_URL` environment variable
@@ -346,6 +346,33 @@ frontend:
   # auth: true                   # implied by protected: login
 ```
 
+### Stack: internal-service-aca (internal API)
+
+```yaml
+name: my-internal-service
+stack: internal-service-aca
+
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-internal-service-api:latest
+    port: 8000
+    # No EasyAuth, no Entra app registration
+    # Authenticate callers via JWT middleware or managed identity tokens
+    env:
+      - name: LOG_LEVEL
+        value: info
+
+resources:
+  postgres:
+    enabled: true
+  cosmos:
+    enabled: false
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+```
+
 ### Minimal: API only (web-app-aca, single service)
 
 ```yaml
@@ -402,6 +429,20 @@ services:
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
+
+### `internal-service-aca`
+
+| Requirement | Rule |
+|-------------|------|
+| Services | Required: single API service with `image`, `port` |
+| Auth | No EasyAuth, no Entra app registration. Service-to-service auth via JWT middleware or managed identity tokens. |
+| Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
+| Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
+| Volume | Optional per-service: `mount_path`, `size_gib` |
+| Resources | Supports: postgres, cosmos, redis, storage |
+| Dockerfiles | Must exist for the API service (not part of manifest, but prerequisite) |
+| Build/push | Must be done BEFORE `amplifier-online up` |
+| Health endpoints | Container must expose `/health` -> 200 OK |
 
 ### `web-app-awa`
 

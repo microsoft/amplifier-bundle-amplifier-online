@@ -31,6 +31,6 @@ These rules apply even if the user gives step-by-step instructions.
 
 ## Core Concepts
 
-- **Stack** -- A deployment blueprint (e.g., `web-app-aca`) defining which Azure resources get provisioned.
+- **Stack** -- A deployment blueprint (e.g., `web-app-aca`, `internal-service-aca`) defining which Azure resources get provisioned.
 - **Project** -- Your application deployed via a stack; lives in your repo as `amplifier-online.yaml`.
 - **Manifest** -- The `amplifier-online.yaml` file describing containers, stack, and resources.

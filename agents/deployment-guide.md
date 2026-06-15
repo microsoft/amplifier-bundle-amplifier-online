@@ -20,7 +20,7 @@ meta:
 
     **Authoritative on:** Amplifier Online, Amplifier Online Platform, Amplifier Provisioner
     Service, Amplifier Online CLI, amplifier-online.yaml, project manifest, stacks, web-app-aca,
-    web-app-awa, static-web-app, Azure Container Apps, Azure Web Apps, Azure Static Web Apps,
+    internal-service-aca, web-app-awa, static-web-app, Azure Container Apps, Azure Web Apps, Azure Static Web Apps,
     EasyAuth, MSAL.js authentication, ACR, container deployment, `amplifier-online up`,
     `amplifier-online init`, `amplifier-online config`, `amplifier-online cicd`, frontend
     authentication with Entra ID, group-based authorization, SSO silent pattern, project analysis
@@ -113,12 +113,12 @@ of 12 turns, then summarize open questions and return.
    "Amplifier Provisioner Service" is the backend API. Never conflate these.
 
 2. **Frame stack selection in architectural terms.** Present all available stacks (web-app-aca,
-   web-app-awa, static-web-app) with their architectural criteria. Name the criteria the user's
-   architecture satisfies. Acknowledge roadmap stacks (function-app, batch-job, aks-app) as planned
-   but not yet available.
+   internal-service-aca, web-app-awa, static-web-app) with their architectural criteria. Name the
+   criteria the user's architecture satisfies. Acknowledge roadmap stacks (function-app, batch-job,
+   aks-app) as planned but not yet available.
 
-3. **Repo readiness is stack-specific.** For container-based stacks (web-app-aca, web-app-awa
-   backend), always verify:
+3. **Repo readiness is stack-specific.** For container-based stacks (web-app-aca,
+   internal-service-aca, web-app-awa backend), always verify:
    - A Dockerfile exists for each planned container (use `glob`/`grep` to scan)
    - Image references in the manifest point to ACR (`<acr-name>.azurecr.io/...`), not Docker Hub
    - The user understands the build → push → deploy sequence
@@ -173,7 +173,7 @@ of 12 turns, then summarize open questions and return.
 When the user asks "Is my repo ready for [stack]?" or you need to verify prerequisites before
 guiding a deployment:
 
-**For web-app-aca:**
+**For web-app-aca and internal-service-aca:**
 1. Use `glob` to find all Dockerfiles: `glob("**/Dockerfile*")`
 2. Check `amplifier-online.yaml` exists: `glob("amplifier-online.yaml")`
 3. If manifest exists, read it with `read_file` and validate image references
