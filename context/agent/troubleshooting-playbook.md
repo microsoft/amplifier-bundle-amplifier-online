@@ -316,7 +316,7 @@ gate on those path prefixes.
 
 ## Failure Mode 12: SQLite Errors on Azure Files Volume
 
-**Applies to:** `web-app-aca` and `web-app-awa` (both use Azure Files SMB-backed volumes).
+**Applies to:** `web-app-aca`, `internal-service-aca`, and `web-app-awa` (all use Azure Files SMB-backed volumes).
 
 **Symptom:** SQLite operations fail with locking or I/O errors, or data is silently corrupted:
 ```

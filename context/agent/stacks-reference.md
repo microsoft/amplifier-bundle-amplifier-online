@@ -15,20 +15,22 @@ destroy a specific type of workload.
 
 Match your application's architecture to a stack using these criteria:
 
-| Criteria | `web-app-aca` | `web-app-awa` | `static-web-app` |
-|----------|:---:|:---:|:---:|
-| Multi-container backend + frontend | ✅ | ❌ | ❌ |
-| Single backend container + static frontend | ❌ | ✅ | ❌ |
-| Pure static site (no backend) | ❌ | ❌ | ✅ |
-| Persistent volumes | ✅ | ✅ | ❌ |
-| Needs managed databases | ✅ | ✅ | ❌ |
-| Container-to-container networking | ✅ | ❌ | ❌ |
-| GitHub-integrated CI/CD for frontend | ⚠️ | ✅ | ✅ |
-| PR preview deployments | ⚠️ | ✅ | ✅ |
-| Entra ID auth (EasyAuth on frontends) | ✅ | ✅ | ✅ |
-| JWT middleware (API token validation) | ✅ | ✅ | ❌ |
+| Criteria | `web-app-aca` | `internal-service-aca` | `web-app-awa` | `static-web-app` |
+|----------|:---:|:---:|:---:|:---:|
+| Multi-container backend + frontend | ✅ | ❌ | ❌ | ❌ |
+| Internal-only backend (no public ingress) | ❌ | ✅ | ❌ | ❌ |
+| Single backend container + static frontend | ❌ | ❌ | ✅ | ❌ |
+| Pure static site (no backend) | ❌ | ❌ | ❌ | ✅ |
+| Persistent volumes | ✅ | ✅ | ✅ | ❌ |
+| Needs managed databases | ✅ | ✅ | ✅ | ❌ |
+| Container-to-container networking | ✅ | ✅ | ❌ | ❌ |
+| GitHub-integrated CI/CD for frontend | ⚠️ | ❌ | ✅ | ✅ |
+| PR preview deployments | ⚠️ | ❌ | ✅ | ✅ |
+| Entra ID auth (EasyAuth on frontends) | ✅ | ❌ | ✅ | ✅ |
+| JWT middleware (API token validation) | ✅ | ✅ | ✅ | ❌ |
+| Service-to-service auth (managed identity) | ✅ | ✅ | ❌ | ❌ |
 
-**All three stacks are production-ready and available now.**
+**All four stacks are production-ready and available now.**
 
 **How to see what's available:**
 ```bash
@@ -44,6 +46,9 @@ Available deployment stacks:
 
   web-app-awa
     Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+
+  internal-service-aca
+    Internal-only Azure Container App — no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage
 
   static-web-app
     Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
@@ -345,6 +350,99 @@ frontend:
 
 ---
 
+## Stack: `internal-service-aca`
+
+**Full name:** Internal-Only Azure Container App
+
+### What it provisions
+
+- **Container App** -- single API container with `external: false` (internal-only ingress)
+- **Container Apps Environment** -- shared, managed by the Platform (same CAE as `web-app-aca`)
+- **Optional: PostgreSQL** (flexible server, shared with other projects)
+- **Optional: Cosmos DB** (document database)
+- **Optional: Redis** (cache)
+- **Optional: ADLS Gen2 Storage** (blob/file storage)
+- **Networking** -- internal DNS only (`<project>-api.internal.<env-default-domain>`), reachable only within the Container Apps Environment; no public FQDN
+- **Authentication** -- no EasyAuth, no Entra app registration; service-to-service auth via JWT middleware or managed identity tokens
+- **Observability** -- Application Insights (workspace-based)
+
+### Best for
+
+- Backend microservices consumed by other services in the same Container Apps Environment
+- Background workers and job processors
+- Internal APIs that should never be exposed to the public internet
+- Service-to-service architectures where callers authenticate via managed identity or JWT tokens
+
+### What this stack does NOT support
+
+- Public ingress (no browser-facing traffic)
+- EasyAuth or CORS (no browser auth flows)
+- Frontend containers or static web apps
+- Entra app registration (no MSAL.js, no SSO)
+
+**Need public access?** Use `web-app-aca` instead.
+
+### Repo prerequisites (MUST verify before `amplifier-online up`)
+
+1. **Dockerfile exists** -- one Dockerfile for the API container. The `internal-service-aca` stack
+   does NOT build images; it deploys pre-built images from ACR. If the Dockerfile doesn't exist or
+   the image hasn't been built and pushed, the deployment will fail to pull the image.
+
+   Use `glob` to verify:
+   ```
+   glob("**/Dockerfile*")
+   ```
+
+2. **Image is in ACR** -- the `image:` value in the manifest MUST use ACR format:
+   ```
+   <acr-name>.azurecr.io/<project>-<service>:<tag>
+   ```
+   Docker Hub images will fail because the Container Apps Environment is not configured to pull
+   from Docker Hub. ACR credentials are injected by the platform automatically.
+
+3. **Build -> Push sequence understood** -- the image must be built and pushed to ACR BEFORE
+   running `amplifier-online up`. The CLI/service does not build images.
+
+4. **Health endpoint exists** -- the container MUST expose `/health` that returns 200 OK.
+
+### Stack-specific manifest fields
+
+```yaml
+name: my-internal-service
+stack: internal-service-aca   # <-- must exactly match this string
+
+services:
+  api:
+    image: amplifieronlinecr.azurecr.io/my-internal-service-api:latest
+    port: 8000               # <-- must match the port your API listens on
+    # No EasyAuth, no Entra app registration
+    # Authenticate callers via JWT middleware or managed identity tokens
+    env:
+      - name: LOG_LEVEL
+        value: info
+
+resources:
+  postgres:
+    enabled: true            # <-- provisions a database on the shared Postgres server
+  cosmos:
+    enabled: false
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+```
+
+**Key concepts:**
+- Uses `services:` map -- single API service (no `web` or `frontend` service)
+- **No EasyAuth, no CORS, no public FQDN** -- the container is only reachable within the CAE
+- **No Entra app registration** -- no browser auth flows; callers authenticate via service-to-service patterns
+- **Internal DNS** -- the container is reachable at `<project>-api.internal.<env-default-domain>` from other containers in the same CAE
+- Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
+  automatically enforces `maxReplicas=1` (single-instance mode).
+- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage
+
+---
+
 ## Roadmap Stacks (Not Yet Available)
 
 These are planned but not yet implemented. Do not attempt to use them — `amplifier-online stack list`
@@ -376,6 +474,6 @@ amplifier-online up               # 3. Deploy with the new stack
 ## Multiple Projects, Same Stack
 
 Many projects can run on the same stack simultaneously. Each project gets isolated Azure
-resources — its own container apps or web apps, its own Entra app registration, its own database
-(when enabled). The shared infrastructure (Container Apps Environment, ACR, Postgres server)
-is shared at the infrastructure level, but project data is isolated.
+resources -- its own container apps or web apps, its own Entra app registration (when applicable),
+its own database (when enabled). The shared infrastructure (Container Apps Environment, ACR,
+Postgres server) is shared at the infrastructure level, but project data is isolated.

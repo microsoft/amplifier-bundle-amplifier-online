@@ -93,6 +93,9 @@ Available deployment stacks:
   web-app-awa
     Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
 
+  internal-service-aca
+    Internal-only Azure Container App — no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage
+
   static-web-app
     Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
 ```
@@ -121,7 +124,8 @@ template. Requires global config (`amplifier-online config`) to exist first.
 
 ```bash
 amplifier-online init                      # Interactive: prompts for stack (if multiple) and project name
-amplifier-online init --stack web-app-aca  # Non-interactive: specify stack directly
+amplifier-online init --stack web-app-aca          # Non-interactive: specify stack directly
+amplifier-online init --stack internal-service-aca  # Internal-only Container App (no public ingress)
 ```
 
 **Interactive flow:**

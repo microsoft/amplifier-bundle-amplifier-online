@@ -23,7 +23,7 @@ stages:
       1. Scan the project directory at {{ project_dir }} using glob and grep
       2. Follow the detection patterns in @amplifier-online:context/agent/project-analysis.md
       3. Detect: backend framework, frontend framework, containerization status
-      4. Map detected patterns to stack recommendations (web-app-aca, web-app-awa, static-web-app)
+      4. Map detected patterns to stack recommendations (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
       5. Present findings in this format:
       
       ```
@@ -190,14 +190,14 @@ stages:
       
       Run the repo readiness check from your operating principles.
       
-      FOR web-app-aca:
+      FOR web-app-aca and internal-service-aca:
         1. Verify Dockerfiles exist for each container (glob "**/Dockerfile*")
         2. Verify ACR image format in manifest (grep for docker.io or wrong registry)
         3. Verify health endpoints exist (/health returning 200 OK)
         4. Check ports in manifest match application listen ports
       
       FOR web-app-awa:
-        Backend: Same Docker checks as web-app-aca
+        Backend: Same Docker checks as web-app-aca/internal-service-aca
         Frontend: 
           - Verify GitHub repo URL in manifest is accessible
           - Check build output directory (output_location) matches framework default
@@ -303,7 +303,7 @@ stages:
       
       STEP 4: Extract deployment info
         - Project URL (from deployment output)
-        - Container App names (if web-app-aca)
+        - Container App names (if web-app-aca or internal-service-aca)
         - Static Web App name (if static-web-app or web-app-awa frontend)
       
       Store: deployed: true, deployment_url: [extracted-url]
@@ -391,7 +391,7 @@ stages:
           
           Present required secrets based on stack:
           
-          {% if selected_stack == 'web-app-aca' or selected_stack == 'web-app-awa' %}
+          {% if selected_stack == 'web-app-aca' or selected_stack == 'internal-service-aca' or selected_stack == 'web-app-awa' %}
           For container workflows:
             - AZURE_CLIENT_ID
             - AZURE_TENANT_ID

@@ -221,23 +221,52 @@ Markers:
 
 ---
 
-### Pattern 3: Backend Only (API service, no frontend)
+### Pattern 3: Backend Only (Public API service, no frontend)
 
 **Detected:**
 - `./Dockerfile` or `./api/Dockerfile`
 - Backend framework
 - No frontend directory or files
+- Needs public ingress (external clients, browser-based API calls)
 
 **Recommended Stack:** `web-app-aca` (backend-only)
 
 **Reasoning:**
-- Pure API service
+- Pure API service with public access
 - Container Apps provides auto-scaling, ingress, health probes
 - Can add frontend later without re-deploying backend
 
 **Alternative:** `web-app-awa` (backend-only)
 - Trade-off: Different compute platform (Azure Web App vs Container Apps)
 - Gain: Easier to add Static Web App frontend later
+
+---
+
+### Pattern 3b: Backend Only (Internal API / Microservice)
+
+**Detected:**
+- `./Dockerfile` or `./api/Dockerfile`
+- Backend framework
+- No frontend directory or files
+- Service is consumed only by other services in the same environment (not by browsers or external clients)
+
+**Recommended Stack:** `internal-service-aca`
+
+**Reasoning:**
+- Internal-only microservice or worker -- no public ingress needed
+- Container Apps Environment provides internal DNS for service-to-service calls
+- No EasyAuth overhead, no Entra app registration needed
+- Service-to-service auth via JWT middleware or managed identity tokens
+- Same optional resources (postgres, cosmos, redis, storage) as `web-app-aca`
+
+**Not suitable if:**
+- Service needs to be reachable from the public internet
+- Service needs browser-based authentication (EasyAuth / MSAL.js)
+- Service needs a public FQDN
+
+**Alternative:** `web-app-aca`
+- Trade-off: Gets public ingress even if not needed
+- Gain: Can add frontend containers later, supports EasyAuth
 
 ---
 
@@ -278,6 +307,8 @@ Markers:
 - Container Apps Environment supports multiple apps
 - Internal networking between services
 
+**Alternative:** `internal-service-aca` for individual microservices that do not need public ingress.
+
 **Not suitable for:** `web-app-awa` or `static-web-app` (single backend only)
 
 ---
@@ -293,7 +324,7 @@ Markers:
 - Provide template Dockerfiles for detected framework
 - Re-run analysis after Dockerfiles are created
 
-**Do NOT recommend a stack yet** — containerization is a prerequisite for web-app-aca and web-app-awa.
+**Do NOT recommend a stack yet** — containerization is a prerequisite for web-app-aca, internal-service-aca, and web-app-awa.
 
 ---
 
@@ -320,7 +351,7 @@ Resources Detected:
   - Cache: [Redis | None]
   - Storage: [File uploads/object storage | None]
 
-STACK RECOMMENDATION: [web-app-aca | web-app-awa | static-web-app]
+STACK RECOMMENDATION: [web-app-aca | internal-service-aca | web-app-awa | static-web-app]
 
 Reasoning:
 - [Why this stack matches the detected architecture]

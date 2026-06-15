@@ -34,6 +34,17 @@ Generates two workflow files in `.github/workflows/`:
 
 Backend workflow triggers on backend code changes; frontend workflow uses Static Web Apps Deploy action.
 
+### For `internal-service-aca` (Internal Container App)
+
+Generates one workflow file in `.github/workflows/`:
+
+```
+.github/workflows/
+└── api-build-deploy.yaml    # API container build & deploy
+```
+
+Same container build pattern as `web-app-aca` but API service only -- no web workflow, no frontend deploy.
+
 ### For `static-web-app` (Static Site Only)
 
 Generates one workflow file in `.github/workflows/`:
@@ -92,6 +103,25 @@ Trigger: push to main (path filter) or workflow_dispatch
 - Adds a **revision suffix** from git SHA + run number for easy rollback identification
 - Runs a **health check** after deploy to fail fast on broken deployments
 
+### Stack: `internal-service-aca`
+
+Single generated workflow (`api-build-deploy.yaml`) follows the same pattern as `web-app-aca` API workflows:
+
+```
+Trigger: push to main (path filter) or workflow_dispatch
+  |
+1. Checkout repository
+2. Set up Docker Buildx
+3. Azure login (OIDC -- no stored passwords)
+4. Log in to Azure Container Registry (az acr login)
+5. Build Docker image (with SHA tag + latest tag)
+6. Push both tags to ACR
+7. Update Container App (az containerapp update --image <SHA-tagged-image>)
+8. Health check (curl internal endpoint/health with retries)
+```
+
+**Key difference from `web-app-aca`:** Only one workflow (API only) -- no web/frontend workflow generated.
+
 ### Stack: `web-app-awa`
 
 **Backend workflow (`backend-build-deploy.yaml`):**
@@ -143,7 +173,7 @@ Trigger: push to main, pull_request (for PR previews), or workflow_dispatch
 
 After generating workflows, set these secrets in your GitHub repository.
 
-### For all container-based stacks (`web-app-aca`, `web-app-awa` backend)
+### For all container-based stacks (`web-app-aca`, `internal-service-aca`, `web-app-awa` backend)
 
 Navigate to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
 
@@ -222,6 +252,18 @@ on:
 The path filter value comes from your project structure. If your API code is in
 `backend/` rather than `api/`, update the path filter in the generated workflow.
 
+### `internal-service-aca` workflow
+
+```yaml
+# api-build-deploy.yaml
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'    # <-- Only triggers when api/ directory changes
+```
+
 ### `web-app-awa` workflows
 
 ```yaml
@@ -277,6 +319,16 @@ env:
   IMAGE_NAME: amplifieronlinecr.azurecr.io/<project-name>-api
 ```
 
+### `internal-service-aca`
+
+```yaml
+env:
+  CONTAINER_APP_NAME: <project-name>-api    # Azure Container App to update
+  RESOURCE_GROUP: amplifier-online-rg       # From ~/.amplifier-online/config.yaml
+  ACR_NAME: amplifieronlinecr               # From ~/.amplifier-online/config.yaml
+  IMAGE_NAME: amplifieronlinecr.azurecr.io/<project-name>-api
+```
+
 ### `web-app-awa` (backend)
 
 ```yaml
@@ -301,7 +353,7 @@ env:
 
 After running `amplifier-online cicd create`:
 
-### For `web-app-aca` and `web-app-awa` (backend)
+### For `web-app-aca`, `internal-service-aca`, and `web-app-awa` (backend)
 
 - [ ] Set `AZURE_CLIENT_ID` secret in GitHub
 - [ ] Set `AZURE_TENANT_ID` secret in GitHub
@@ -336,7 +388,7 @@ After running `amplifier-online cicd create`:
 |---------|-------------|-----|
 | `OIDC: Could not fetch access token` | Missing or wrong federated credential | Verify credential via `az ad app federated-credential list` |
 | `ACR login failed` | AZURE_CLIENT_ID secret missing or wrong | Re-set secret in GitHub |
-| `az containerapp update: not found` | Container App doesn't exist yet | Run `amplifier-online up` first |
+| `az containerapp update: not found` | Container App doesn't exist yet (web-app-aca or internal-service-aca) | Run `amplifier-online up` first |
 | `az webapp config: not found` | Azure Web App doesn't exist yet | Run `amplifier-online up` first |
 | `Health check failed` | App crashed after deploy or no /health endpoint | Check `amplifier-online logs --container api` |
 | Workflow not triggering | Path filter doesn't match changed files | Update path filter in workflow YAML |
@@ -359,7 +411,7 @@ The generated frontend workflows automatically create preview deployments for pu
 
 **No additional configuration needed** — this is built into Azure Static Web Apps Deploy action.
 
-### For `web-app-aca` and backend containers
+### For `web-app-aca`, `internal-service-aca`, and backend containers
 
 PR previews are NOT generated automatically. Backend containers deploy only from `main` branch.
 

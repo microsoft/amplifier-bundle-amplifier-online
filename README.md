@@ -46,7 +46,7 @@ This walks through 9 stages: project analysis, stack selection, environment setu
 For specific questions, the `deployment-guide` agent is available via the mode. It carries detailed knowledge about:
 
 - CLI command reference
-- Stack comparison (web-app-aca, web-app-awa, static-web-app)
+- Stack comparison (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
 - Manifest schema and examples
 - Troubleshooting playbook (14 named failure modes)
 - CI/CD setup with GitHub Actions
@@ -82,6 +82,7 @@ context/
 | Stack | Use Case |
 |-------|----------|
 | `web-app-aca` | Multi-container apps on Azure Container Apps (backend + frontend both containerized) |
+| `internal-service-aca` | Internal-only Azure Container App -- no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage |
 | `web-app-awa` | Container backend + Static Web App frontend (GitHub-integrated CI/CD, PR previews) |
 | `static-web-app` | Pure static sites with no backend |
 
