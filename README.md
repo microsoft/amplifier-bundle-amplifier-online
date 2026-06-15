@@ -7,7 +7,7 @@ This bundle turns Amplifier into an expert deployment guide. It does not deploy 
 ## Installation
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft-amplifier/amplifier-bundle-amplifier-online@main --app
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-amplifier-online@main#subdirectory=behaviors/amplifier-online.yaml" --app
 ```
 
 ## Prerequisites
