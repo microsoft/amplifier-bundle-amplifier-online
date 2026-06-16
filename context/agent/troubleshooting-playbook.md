@@ -574,6 +574,42 @@ apply to API services, which do not have EasyAuth.
 
 ---
 
+## Failure Mode 16: BYOA Validation Failed
+
+**Applies to:** All stacks when `auth.client_id` is set in `amplifier-online.yaml`.
+
+**Symptom:** `amplifier-online up` fails immediately with:
+```
+App registration 'your-client-id' is missing required configuration:
+  - Missing identifier URI. Expected 'api://your-client-id' in identifierUris.
+  - Missing 'access_as_user' OAuth2 permission scope.
+```
+
+**Diagnostic:**
+```bash
+grep -A2 "auth:" amplifier-online.yaml    # Confirm auth.client_id is set
+```
+
+**Root cause:** The user-provided app registration does not meet the minimum requirements for
+the platform. The provisioner validates two things as hard errors:
+
+1. **Missing identifier URI** (`api://{client_id}`) -- required for EasyAuth/JWT audience validation.
+2. **Missing `access_as_user` scope** -- required for MSAL.js token acquisition.
+
+A warning (non-blocking) is also emitted if `requestedAccessTokenVersion` is not `2`.
+
+**Fix:**
+1. In Azure Portal > App registrations > your app > **Expose an API**:
+   - Set Application ID URI to `api://{your-client-id}`
+   - Add a scope with value `access_as_user` (type: Users and admins)
+2. Optionally, set `requestedAccessTokenVersion` to `2` in the app manifest
+3. Re-run `amplifier-online up`
+
+**Note:** The provisioner never modifies a BYOA app registration. It also skips deletion on
+`amplifier-online destroy`. Redirect URIs are printed post-deployment but not auto-configured.
+
+---
+
 ## Failure Mode 15: SWA Authentication Not Enforced
 
 **Applies to:** `web-app-awa`, `static-web-app` stacks.

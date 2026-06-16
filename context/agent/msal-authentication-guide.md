@@ -83,6 +83,12 @@ export async function loadAuthConfig(): Promise<Configuration> {
 - Same Docker image works across environments (dev, staging, prod)
 - No build-time secrets baked into frontend bundle
 
+> **Bring Your Own App Registration:** If your team already has an Entra app registration, you
+> can skip provisioner-managed creation by adding `auth: { client_id: "your-client-id" }` to
+> `amplifier-online.yaml`. The provisioner will validate (but never modify) the app. Minimum
+> requirements: identifier URI (`api://{client_id}`), an `access_as_user` scope, and
+> `requestedAccessTokenVersion: 2`. You are responsible for redirect URIs and other configuration.
+
 ---
 
 ## Step 3: Initialize MSAL
