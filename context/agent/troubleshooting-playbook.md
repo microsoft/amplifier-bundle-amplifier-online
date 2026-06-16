@@ -405,7 +405,7 @@ or returns 500 Internal Server Error with JWT-related errors in logs:
 ```
 HTTP 401 - Unauthorized (on every API call with a Bearer token)
 HTTP 500 - jwt_middleware: JWKS endpoint not configured
-KeyError: 'AUTH_CLIENT_ID' or 'AUTH_TENANT_ID'
+KeyError: 'AZURE_CLIENT_ID' or 'AZURE_TENANT_ID'
 ```
 
 Alternatively, the API accepts all requests without authentication (no middleware at all).
@@ -423,7 +423,7 @@ Common causes:
 
 1. **Middleware not installed:** The `jwt_middleware.py` template was not added to the API service.
 2. **Middleware not registered:** The middleware file exists but is not registered in the FastAPI app.
-3. **Missing environment variables:** `AUTH_CLIENT_ID` or `AUTH_TENANT_ID` not available (auth
+3. **Missing environment variables:** `AZURE_CLIENT_ID` or `AZURE_TENANT_ID` not available (auth
    not enabled for the service in the manifest).
 4. **Missing dependency:** The `PyJWT` and `cryptography` packages are not in the container's
    `requirements.txt`.
@@ -448,7 +448,7 @@ Common causes:
    ```
 
 4. Ensure the service has `auth: true` in the manifest (default for API services) so that
-   `AUTH_CLIENT_ID` and `AUTH_TENANT_ID` environment variables are injected.
+   `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables are injected.
 
 5. Rebuild, push, and redeploy:
    ```bash
@@ -459,7 +459,7 @@ Common causes:
 
 **Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
 API service's responsibility via JWT middleware. The middleware validates signatures against
-Entra's JWKS endpoint, checks audience (`api://{AUTH_CLIENT_ID}`), issuer, and expiry, and
+Entra's JWKS endpoint, checks audience (`api://{AZURE_CLIENT_ID}`), issuer, and expiry, and
 extracts user identity from JWT claims.
 
 ---
@@ -571,6 +571,34 @@ apply to API services, which do not have EasyAuth.
 **After fixing:**
 1. Re-run `amplifier-online up`
 2. Verify with `amplifier-online status` — revision should show "Running"
+
+---
+
+## Failure Mode 15: SWA Authentication Not Enforced
+
+**Applies to:** `web-app-awa`, `static-web-app` stacks.
+
+**Symptom:** SWA app allows unauthenticated access or MSA (personal Microsoft) accounts can
+sign in when only organizational accounts should be permitted.
+
+**Diagnostic:**
+```bash
+# Check if staticwebapp.config.json exists and has an auth section
+cat staticwebapp.config.json | grep -A 10 '"auth"'
+# Check SWA app settings for required env vars
+az staticwebapp appsettings list --name <swa-name>
+```
+
+**Root cause:** Missing or incomplete `auth` section in `staticwebapp.config.json`, or missing
+`AZURE_TENANT_ID` in SWA app settings. Without the AAD identity provider configured with
+`openIdIssuerUri` pinned to the tenant, SWA falls back to allowing all Microsoft accounts
+(including personal MSA accounts) or no authentication at all.
+
+**Fix:**
+1. Verify `staticwebapp.config.json` has the AAD identity provider with `openIdIssuerUri`
+   pinned to the tenant (e.g., `https://login.microsoftonline.com/<tenant-id>/v2.0`)
+2. Verify SWA app settings include both `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
+3. Re-run `amplifier-online up` to regenerate the configuration if needed
 
 ---
 

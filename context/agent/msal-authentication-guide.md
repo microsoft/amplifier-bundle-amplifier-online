@@ -52,7 +52,7 @@ npm install @azure/msal-browser
 **The auth configuration is provided at runtime** (not build time). The Entra app registration
 client ID is created during `amplifier-online up` — it doesn't exist when your Docker image is built.
 
-The container's `entrypoint.sh` writes `AUTH_CLIENT_ID` and `AUTH_TENANT_ID` environment variables
+The container's `entrypoint.sh` writes `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables
 to `/auth-config.json` at container startup. Your frontend fetches this when loading.
 
 ```typescript
@@ -283,7 +283,7 @@ from middleware.jwt_middleware import JWTAuthMiddleware
 app.add_middleware(JWTAuthMiddleware)
 ```
 
-The middleware reads `AUTH_CLIENT_ID` and `AUTH_TENANT_ID` from environment variables
+The middleware reads `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` from environment variables
 (auto-injected by the platform) and validates tokens against Entra's JWKS endpoint.
 
 ---
@@ -439,8 +439,8 @@ Your containers automatically receive these authentication environment variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `AUTH_CLIENT_ID` | Your project's Entra app registration client ID | `a1b2c3d4-...` |
-| `AUTH_TENANT_ID` | Microsoft tenant ID | `72f988bf-...` |
+| `AZURE_CLIENT_ID` | Your project's Entra app registration client ID | `a1b2c3d4-...` |
+| `AZURE_TENANT_ID` | Microsoft tenant ID | `72f988bf-...` |
 
 These are written to `/auth-config.json` by the container entrypoint for frontend consumption.
 
@@ -449,13 +449,31 @@ These are written to `/auth-config.json` by the container entrypoint for fronten
 app and injects `AZURE_CLIENT_ID` into the Static Web App environment. Your SPA reads the
 client ID from the SWA environment rather than `/auth-config.json`.
 
-**API services:** Use `AUTH_CLIENT_ID` to configure the JWT middleware audience
-(`api://{AUTH_CLIENT_ID}`) and `AUTH_TENANT_ID` to derive the JWKS endpoint URL.
+**API services:** Use `AZURE_CLIENT_ID` to configure the JWT middleware audience
+(`api://{AZURE_CLIENT_ID}`) and `AZURE_TENANT_ID` to derive the JWKS endpoint URL.
 
 > **Note:** This `AZURE_CLIENT_ID` is the **per-project Entra app registration** used by
 > MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
 > do not use `AZURE_CLIENT_ID` — they authenticate via GitHub Actions OIDC tokens validated
 > directly by the provisioner. See the [CI/CD Guide](cicd-guide.md) for details.
+
+---
+
+## SWA Authentication via `staticwebapp.config.json`
+
+Static Web App (SWA) stacks (`web-app-awa`, `static-web-app`) use `staticwebapp.config.json`
+for authentication instead of the EasyAuth sidecar used by ACA stacks.
+
+**How it works:**
+- `amplifier-online init` generates `staticwebapp.config.json` automatically for SWA stacks
+- The file configures the AAD identity provider with `openIdIssuerUri` pinned to the tenant
+  and `clientIdSettingName: "AZURE_CLIENT_ID"`
+- Key env vars are `AZURE_CLIENT_ID` (set by Bicep) and `AZURE_TENANT_ID` (set by Bicep)
+
+**Troubleshooting:** If authentication isn't working on a SWA deployment, verify that
+`staticwebapp.config.json` contains an `auth` section with the AAD identity provider
+configured. Missing or incomplete `auth` configuration is the most common cause of SWA
+auth failures.
 
 ---
 
