@@ -638,3 +638,57 @@ az staticwebapp appsettings list --name <swa-name>
 
 ---
 
+## Failure Mode 17: SPA Login Loop — MSAL Redirect Return Stripped by the SWA Auth Gate
+
+**Applies to:** `web-app-awa`, `static-web-app` — any SWA frontend that ALSO runs its own
+MSAL.js `loginRedirect` (e.g. a SPA acquiring Microsoft Graph delegated tokens with scopes
+beyond the EasyAuth session).
+
+**Symptom:** An infinite login loop. The user passes the EasyAuth gate (login #1), the SPA
+loads and shows its OWN "Sign in" button, they log in again (login #2), and land back on the
+SPA's sign-in — forever. Tell-tale signature:
+- Fails in Chrome/Edge but **works in Safari**.
+- **Cache-sensitive** — works with the browser HTTP cache ON, fails with "Disable cache" ON.
+- **No CSP violations** in the console (this looks auth-related but is NOT a CSP problem).
+
+**Diagnostic:** Capture a failing-browser network trace (Disable cache ON) and inspect the
+request to `/` immediately after the *second* login returns. In the console trace you will see
+the EasyAuth authorize URL fire **again** right after the SPA's MSAL authorize — i.e. the
+return to `/` is 302'd back to the login gate instead of the app consuming the auth code.
+
+**Root cause:** Two stacked browser-auth systems — the SWA EasyAuth gate
+(`/*: authenticated` + `401 → 302 /.auth/login`) and the SPA's own MSAL `loginRedirect`. MSAL
+returns its auth code to `https://app/#code=...`; the browser re-fetches `/`; that request hits
+the `authenticated` route rule and is **302'd to `/.auth/login`, which strips the MSAL `#code`
+fragment** before MSAL can consume it. With no code, MSAL never establishes an account → the
+SPA shows "Sign in" again → loop. Safari masks it by serving `/` from bfcache (no network
+fetch, no gate detour); Chromium forces the network fetch (and may withhold the cross-site auth
+cookie), so the gate eats the return.
+
+**Fix:** Route MSAL's redirect-return through an **anonymous** route the gate does not intercept.
+
+1. In `staticwebapp.config.json`, add an anonymous callback route ABOVE the catch-all:
+   ```jsonc
+   "routes": [
+     { "route": "/.auth/*",       "allowedRoles": ["anonymous", "authenticated"] },
+     { "route": "/auth-callback", "allowedRoles": ["anonymous", "authenticated"] },
+     { "route": "/*",             "allowedRoles": ["authenticated"] }
+   ]
+   ```
+2. Point MSAL at it: `redirectUri = window.location.origin + "/auth-callback"`, and after
+   `handleRedirectPromise()` establishes the account on that path, route into `/`.
+3. Register `https://<your-swa-host>/auth-callback` as a **SPA redirect URI** on the app
+   registration (AAD requires an exact match, else AADSTS50011).
+
+**Better still — avoid the second login entirely:** prefer MSAL `ssoSilent()` to acquire tokens
+from the existing EasyAuth session (one browser login, no return navigation for the gate to
+strip — see the MSAL Authentication Guide, "SWA EasyAuth + MSAL: One Login, Not Two"). Use the
+`/auth-callback` fallback only when `ssoSilent` can't be used (e.g. its hidden iframe is blocked
+by `X-Frame-Options` / third-party-cookie partitioning in a gated SWA).
+
+**Key insight:** A SWA frontend running its own `loginRedirect` is stacking a second auth flow
+behind EasyAuth. The auth-code return MUST land on a route excluded from the `authenticated`
+gate, or the gate strips the code and the app login-loops.
+
+---
+

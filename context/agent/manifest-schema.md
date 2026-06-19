@@ -639,6 +639,7 @@ Before running `amplifier-online up`, verify:
 - [ ] Web/frontend services have `auth_exclude` configured if they proxy API calls (e.g., `["/api"]`)
 - [ ] API services do NOT have `protected` set (deprecated — APIs use JWT middleware, not EasyAuth)
 - [ ] Frontend `protected` is set to `login` (always enforced for browser-facing frontends)
+- [ ] If a SWA frontend runs its OWN MSAL `loginRedirect` (e.g. for Graph tokens), its `redirect_uri` targets an anonymous route (e.g. `/auth-callback`) in `staticwebapp.config.json` — NOT a path under the `authenticated` gate (prevents the auth-code-stripped login loop; see Troubleshooting Playbook, Failure Mode 17). Prefer `ssoSilent` (one login) where possible.
 - [ ] For containerized deployments: images have been built and pushed to ACR
 - [ ] For containerized deployments: each container has `/health` endpoint
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`

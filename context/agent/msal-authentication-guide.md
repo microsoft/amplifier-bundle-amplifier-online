@@ -535,6 +535,34 @@ export default App;
 
 ---
 
+## SWA EasyAuth + MSAL: One Login, Not Two (avoid the login loop)
+
+A SWA frontend always has the EasyAuth gate enforced. If your SPA ALSO runs its own MSAL
+`loginRedirect` (e.g. to acquire Microsoft Graph delegated tokens), you now have **two stacked
+browser logins** — and the EasyAuth gate will eat MSAL's auth-code return, producing an infinite
+login loop (see Troubleshooting Playbook, "Failure Mode 17").
+
+**Prefer one login.** Acquire tokens from the existing EasyAuth session with `ssoSilent()`
+(Step 4 above) instead of a second interactive `loginRedirect`. One browser login, no second
+redirect, no return navigation for the gate to intercept — the loop is structurally impossible.
+
+**If you must use `loginRedirect`** (e.g. `ssoSilent`'s hidden iframe is blocked — Microsoft's
+`X-Frame-Options: deny` on `login.microsoftonline.com` plus third-party-cookie partitioning can
+block the silent iframe inside a gated SWA), then its `redirect_uri` **MUST** target a route
+excluded from the `authenticated` gate:
+
+- Add an anonymous `/auth-callback` route in `staticwebapp.config.json` (above `/*`).
+- Set MSAL `redirectUri = window.location.origin + "/auth-callback"`; complete
+  `handleRedirectPromise()` there, then route into `/`.
+- Register `https://<your-swa-host>/auth-callback` as a SPA redirect URI on the app registration.
+
+Without the anonymous callback route, the `/*: authenticated` rule 302s the code-bearing return
+to `/.auth/login` and strips the `#code` fragment → MSAL can't establish an account → login
+loop. The failure signature is browser- and cache-dependent (fails Chrome/Edge, works Safari;
+fails with Disable-cache ON) with **no** CSP violations — see Failure Mode 17.
+
+---
+
 ## Related Documentation
 
 - [Stack Users Guide](../stack-users-guide.md) - Complete deployment guide
