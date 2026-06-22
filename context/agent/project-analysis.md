@@ -12,8 +12,9 @@ Follow this sequence:
 1. **Scan for Dockerfiles** → determines containerization status
 2. **Detect frameworks** → identifies backend/frontend technologies
 3. **Check GitHub integration** → determines if repo is GitHub-hosted
-4. **Detect resource needs** → identifies database/cache/storage requirements
-5. **Map to stack** → matches detected pattern to available stacks
+4. **Audit existing SWA config** → checks `staticwebapp.config.json` for platform compatibility
+5. **Detect resource needs** → identifies database/cache/storage requirements
+6. **Map to stack** → matches detected pattern to available stacks
 
 ---
 
@@ -136,7 +137,51 @@ Store: `github.com/org/repo`
 
 ---
 
-## Step 5: Detect Resource Needs
+## Step 5: Audit Existing `staticwebapp.config.json` (SWA Stacks)
+
+When the project already has a `staticwebapp.config.json`, **do not skip over it**. The file
+may be missing sections the platform requires, even though `amplifier-online init` will
+(correctly) preserve it.
+
+```bash
+glob("**/staticwebapp.config.json")
+```
+
+**If found, audit for these sections:**
+
+| Section | Check for | If missing |
+|---------|-----------|------------|
+| `auth.identityProviders.azureActiveDirectory` | `clientIdSettingName` and `openIdIssuerUri` | **Critical** — SWA login will not be pinned to the project's Entra app registration or tenant. Recommend merging in the `auth` block. |
+| `routes` with `allowedRoles: ["authenticated"]` | At least one `/*` route requiring authentication | Auth routing won't be enforced |
+| `navigationFallback` with `rewrite: "/index.html"` | SPA fallback routing | SPA deep links will 404 on refresh |
+| `globalHeaders` with CSP | `connect-src` includes `https://login.microsoftonline.com`; `frame-src` includes `https://login.microsoftonline.com` | MSAL.js token acquisition and silent renewal will be blocked |
+
+**If `auth.identityProviders` is missing**, recommend merging this block (preserving everything
+else in the file):
+
+```json
+"auth": {
+  "identityProviders": {
+    "azureActiveDirectory": {
+      "registration": {
+        "openIdIssuerUri": "https://login.microsoftonline.com/{tenant-id}/v2.0",
+        "clientIdSettingName": "AZURE_CLIENT_ID"
+      }
+    }
+  }
+}
+```
+
+**If the file has a custom CSP** in `globalHeaders`, verify the MSAL-required domains are present.
+Do not replace or regenerate the file — user customizations (security headers, refined routes,
+build-tool-specific exclude patterns) are typically better than the platform-generated defaults.
+
+**Report findings in the analysis output** under a new "SWA Config Audit" section so the user
+knows what needs to be merged before deployment.
+
+---
+
+## Step 6: Detect Resource Needs
 
 **PostgreSQL:**
 ```bash

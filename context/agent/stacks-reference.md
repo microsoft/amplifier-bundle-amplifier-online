@@ -352,6 +352,45 @@ const msalConfig = {
 > similar, update your config module to read `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID`
 > instead. No changes to `amplifier-online.yaml` are needed — the platform handles injection.
 
+
+**Existing `staticwebapp.config.json` reconciliation:**
+
+When `amplifier-online init` detects an existing `staticwebapp.config.json`, it skips generation
+to avoid overwriting user customizations. However, the existing config may be missing sections the
+platform expects. **Always audit** the existing file against this checklist:
+
+| Section | Required? | What to check |
+|---------|-----------|---------------|
+| `auth.identityProviders` | **Yes** | Must contain `azureActiveDirectory` with `openIdIssuerUri` (pinned to tenant) and `clientIdSettingName: "AZURE_CLIENT_ID"`. Without this, SWA falls back to its built-in multi-tenant AAD app — login is not pinned to the project's Entra registration or tenant. |
+| `routes` | **Yes** | Must have `"route": "/*", "allowedRoles": ["authenticated"]` to enforce login. Explicitly unprotecting `/.auth/*` is a best practice. |
+| `navigationFallback` | **Yes** (for SPAs) | Must rewrite to `index.html`. The `exclude` patterns should match the build tool's actual output (Vite uses `/assets/*`, not generic `/images/*`, `/css/*`, `/js/*`). |
+| `responseOverrides` | Recommended | 401 → redirect to `/.auth/login/aad`. Adding `?post_login_redirect_uri=/` improves UX. |
+| `globalHeaders` (CSP) | Recommended | If a CSP is present, verify `connect-src` includes `https://login.microsoftonline.com` (MSAL.js token requests) and `frame-src` includes `https://login.microsoftonline.com` (silent token renewal iframes). |
+
+**The `auth.identityProviders` section** is the most commonly missing piece. The correct shape is:
+
+```json
+"auth": {
+  "identityProviders": {
+    "azureActiveDirectory": {
+      "registration": {
+        "openIdIssuerUri": "https://login.microsoftonline.com/{tenant-id}/v2.0",
+        "clientIdSettingName": "AZURE_CLIENT_ID"
+      }
+    }
+  }
+}
+```
+
+The `clientIdSettingName` tells SWA to read the app setting named `AZURE_CLIENT_ID` (injected by
+the Bicep template) and use it as the OAuth client ID for the built-in AAD login flow. The
+`openIdIssuerUri` pins login to a specific tenant — without it, any Microsoft account can log in.
+
+> **User configs are often better than platform-generated ones.** The platform generates a minimal
+> `staticwebapp.config.json` with no security headers, generic exclude patterns, and no
+> `post_login_redirect_uri`. When a user has invested in their config (custom CSP, refined routes,
+> build-tool-specific excludes), preserve their customizations and only merge in the `auth` section.
+
 ### Optional Serverless API Functions
 
 You can add serverless functions alongside your static site:
