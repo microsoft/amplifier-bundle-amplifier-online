@@ -318,7 +318,39 @@ frontend:
 
 **Frontend auth:**
 - `protected: login` — always enforced. Sign-in required via `staticwebapp.config.json` route rules.
-- `auth: true` — implied by `protected: login`. Registers Entra app and injects `AZURE_CLIENT_ID` for MSAL.js token acquisition.
+- `auth: true` — implied by `protected: login`. Registers Entra app and injects auth env vars for MSAL.js token acquisition.
+
+**Auth environment variables (SWA-specific):**
+
+The `static-web-app` Bicep template injects two app settings into the SWA resource:
+
+| SWA App Setting | Value | How your SPA reads it |
+|-----------------|-------|----------------------|
+| `VITE_AZURE_CLIENT_ID` | Entra app registration client ID | `import.meta.env.VITE_AZURE_CLIENT_ID` |
+| `VITE_AZURE_TENANT_ID` | Entra tenant ID | `import.meta.env.VITE_AZURE_TENANT_ID` |
+
+Azure SWA exposes app settings as environment variables during the Oryx build. Build tools like
+Vite automatically bake `VITE_*` env vars into the JavaScript bundle via `import.meta.env`. This
+means auth configuration is injected at **build time** (not runtime) — no `/auth-config.json`
+fetch is needed for SWA-hosted SPAs.
+
+**Your SPA code must use these exact names.** Using custom env var names (e.g.,
+`VITE_MSAL_CLIENT_ID`) will result in empty strings at runtime because the platform only injects
+the `VITE_AZURE_*` variants.
+
+```typescript
+// Correct: reads platform-injected values
+const msalConfig = {
+  auth: {
+    clientId: import.meta.env.VITE_AZURE_CLIENT_ID,
+    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_AZURE_TENANT_ID}`,
+  },
+};
+```
+
+> **Migrating from custom env var names?** If your app currently reads `VITE_MSAL_CLIENT_ID` or
+> similar, update your config module to read `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID`
+> instead. No changes to `amplifier-online.yaml` are needed — the platform handles injection.
 
 ### Optional Serverless API Functions
 
