@@ -452,8 +452,10 @@ These are written to `/auth-config.json` by the container entrypoint for fronten
 
 **Static Web App frontends (`web-app-awa`, `static-web-app`):** Frontends always have
 `protected: login` enforced, which implies `auth: true`. The orchestrator registers an Entra
-app and injects `AZURE_CLIENT_ID` into the Static Web App environment. Your SPA reads the
-client ID from the SWA environment rather than `/auth-config.json`.
+app and injects `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` into the SWA environment
+as app settings. Your SPA reads these values via `import.meta.env.VITE_AZURE_CLIENT_ID` (baked
+into the JS bundle at build time) rather than the `/auth-config.json` runtime fetch pattern
+used by container stacks. See "SWA Frontend Auth Configuration" section above for details.
 
 **API services:** Use `AZURE_CLIENT_ID` to configure the JWT middleware audience
 (`api://{AZURE_CLIENT_ID}`) and `AZURE_TENANT_ID` to derive the JWKS endpoint URL.
@@ -462,6 +464,58 @@ client ID from the SWA environment rather than `/auth-config.json`.
 > MSAL.js for end-user authentication. It is unrelated to CI/CD. Container CI/CD workflows
 > do not use `AZURE_CLIENT_ID` — they authenticate via GitHub Actions OIDC tokens validated
 > directly by the provisioner. See the [CI/CD Guide](cicd-guide.md) for details.
+
+---
+
+## SWA Frontend Auth Configuration (Build-Time Injection)
+
+**This section applies to `static-web-app` and `web-app-awa` frontend stacks only.**
+
+Unlike container stacks (which use the runtime `/auth-config.json` fetch pattern described in
+Step 2 above), SWA-hosted SPAs receive auth configuration at **build time** through SWA app
+settings.
+
+### How it works
+
+1. `amplifier-online up` creates the Entra app registration and provisions the SWA resource
+2. The Bicep template sets `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` as SWA app settings
+3. During the GitHub Actions build, Azure SWA's Oryx build exposes these app settings as env vars
+4. Vite (or similar build tools) bakes `VITE_*` env vars into the JavaScript bundle
+5. At runtime, the values are already embedded in the JS -- no fetch needed
+
+### SWA auth config pattern
+
+```typescript
+// src/auth/config.ts (for SWA-hosted SPAs)
+import { Configuration } from '@azure/msal-browser';
+
+// Values are baked in at build time by Vite from SWA app settings.
+// No runtime fetch needed -- unlike the /auth-config.json pattern for containers.
+export const msalConfig: Configuration = {
+  auth: {
+    clientId: import.meta.env.VITE_AZURE_CLIENT_ID ?? '',
+    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_AZURE_TENANT_ID}`,
+    redirectUri: window.location.origin + '/',
+  },
+  cache: {
+    cacheLocation: 'localStorage',
+    storeAuthStateInCookie: false,
+  },
+};
+```
+
+### Container vs SWA auth config comparison
+
+| | Container stacks (`web-app-aca`) | SWA stacks (`static-web-app`, `web-app-awa`) |
+|--|--|--|
+| **When injected** | Runtime (container start) | Build time (Oryx build) |
+| **Env var names** | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | `VITE_AZURE_CLIENT_ID`, `VITE_AZURE_TENANT_ID` |
+| **How SPA reads** | Fetch `/auth-config.json` at page load | `import.meta.env.VITE_AZURE_CLIENT_ID` (baked into JS) |
+| **Async?** | Yes -- `loadAuthConfig()` returns a Promise | No -- values are static imports |
+
+> **Common mistake:** Using `VITE_MSAL_CLIENT_ID` or other custom env var names. The platform
+> injects `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` -- your code must use these exact
+> names or the values will be empty strings at runtime.
 
 ---
 

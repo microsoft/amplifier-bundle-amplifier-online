@@ -482,14 +482,22 @@ without needing to declare them in `services.<name>.env`.
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `AUTH_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend auth, JWT middleware audience validation |
-| `AUTH_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration, JWT middleware JWKS endpoint |
+| `AZURE_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend auth, JWT middleware audience validation |
+| `AZURE_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration, JWT middleware JWKS endpoint |
 
 **Note:** These are injected for all services that have auth enabled. Web services use them for
 EasyAuth configuration. API services use them for JWT middleware configuration (audience =
-`api://{AUTH_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AUTH_TENANT_ID}/...`).
-For Static Web Apps with `auth: true`, `AZURE_CLIENT_ID` is injected into the SWA environment
-instead. When no service or frontend has auth enabled, the orchestrator skips Entra app
+`api://{AZURE_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AZURE_TENANT_ID}/...`).
+
+**Static Web App stacks (`static-web-app`, `web-app-awa` frontend):** The Bicep template injects
+`VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` as SWA app settings (note the `VITE_` prefix).
+Azure SWA exposes app settings as environment variables during the Oryx build, so Vite
+(`import.meta.env.VITE_*`) and other build tools that read env vars will bake these values into
+the JavaScript bundle automatically. Your SPA code **must** read `VITE_AZURE_CLIENT_ID` and
+`VITE_AZURE_TENANT_ID` -- not custom names -- to align with what the platform injects. See the
+"Environment Variable Lifecycle" section below for details on build-time vs runtime injection.
+
+When no service or frontend has auth enabled, the orchestrator skips Entra app
 registration entirely and these variables are not set.
 
 ### Always Injected (All Container Stacks)
@@ -623,8 +631,49 @@ services:
 
 **Rules:**
 - Custom env vars are merged with auto-injected vars
-- Auto-injected vars take precedence (you cannot override `DATABASE_URL`, `AUTH_CLIENT_ID`, etc.)
+- Auto-injected vars take precedence (you cannot override `DATABASE_URL`, `AZURE_CLIENT_ID`, etc.)
 - Use custom env vars for feature flags, API keys, non-resource config
+
+---
+
+## Environment Variable Lifecycle
+
+Environment variables follow different injection paths depending on your stack type. Understanding
+when each variable becomes available prevents common configuration mistakes.
+
+### Container stacks (`web-app-aca`, `internal-service-aca`, `web-app-awa` backend)
+
+| Phase | What happens | Auth vars available as |
+|-------|--------------|----------------------|
+| **Build time** (Docker build) | Image is built. No platform vars exist yet -- the Entra app registration hasn't been created. | None -- do NOT bake auth config into images |
+| **Deploy time** (`amplifier-online up`) | Platform provisions Azure resources and creates the Entra app registration. | Not yet available to your code |
+| **Runtime** (container start) | Platform injects `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as container environment variables. | `os.environ["AZURE_CLIENT_ID"]`, `os.environ["AZURE_TENANT_ID"]` |
+
+**Key insight:** Container images must be environment-agnostic. Auth configuration is injected at
+runtime, which is why the MSAL guide prescribes the `/auth-config.json` pattern -- `entrypoint.sh`
+writes the runtime env vars to a JSON file that the SPA fetches at page load.
+
+### Static Web App stacks (`static-web-app`, `web-app-awa` frontend)
+
+| Phase | What happens | Auth vars available as |
+|-------|--------------|----------------------|
+| **Deploy time** (`amplifier-online up`) | Platform provisions the SWA resource and creates the Entra app registration. Bicep sets `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` as SWA app settings. | Not yet available to your code |
+| **Build time** (Oryx build during GitHub Actions) | SWA exposes app settings as environment variables during the build. Vite bakes any `VITE_*` env var into the JS bundle via `import.meta.env`. | `import.meta.env.VITE_AZURE_CLIENT_ID`, `import.meta.env.VITE_AZURE_TENANT_ID` |
+| **Runtime** (browser) | Values are already embedded in the JS bundle from the build step. No runtime fetch needed. | Already baked in -- no `/auth-config.json` needed |
+
+**Key insight:** SWA stacks use **build-time injection** (not runtime). The platform sets
+`VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` as SWA app settings, and the Oryx build
+exposes them as env vars. Your SPA code must read these exact names -- using custom env var names
+(e.g., `VITE_MSAL_CLIENT_ID`) will result in empty values at runtime.
+
+### Common mistakes
+
+| Mistake | Why it fails | Fix |
+|---------|-------------|-----|
+| Hardcoding client ID in source code | Different per environment; breaks on redeploy | Use platform-injected vars |
+| Using `VITE_MSAL_CLIENT_ID` instead of `VITE_AZURE_CLIENT_ID` | Platform injects `VITE_AZURE_CLIENT_ID` -- custom names get empty strings | Align code to platform naming |
+| Reading `import.meta.env.VITE_AZURE_CLIENT_ID` in a container SPA | Container images don't have SWA app settings at build time | Use the `/auth-config.json` runtime fetch pattern |
+| Baking auth config into Docker images | Same image should work across environments | Use runtime injection via `entrypoint.sh` |
 
 ---
 
