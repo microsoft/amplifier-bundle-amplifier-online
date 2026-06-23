@@ -729,11 +729,11 @@ az staticwebapp appsettings list --name <swa-name>
 
 **Root cause:** Missing or incomplete `auth` section in `staticwebapp.config.json`, or missing
 `AZURE_TENANT_ID` in SWA app settings. Without the AAD identity provider configured with
-`openIdIssuerUri` pinned to the tenant, SWA falls back to allowing all Microsoft accounts
+`openIdIssuer` pinned to the tenant, SWA falls back to allowing all Microsoft accounts
 (including personal MSA accounts) or no authentication at all.
 
 **Fix:**
-1. Verify `staticwebapp.config.json` has the AAD identity provider with `openIdIssuerUri`
+1. Verify `staticwebapp.config.json` has the AAD identity provider with `openIdIssuer`
    pinned to the tenant (e.g., `https://login.microsoftonline.com/<tenant-id>/v2.0`)
 2. Verify SWA app settings include both `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
 3. Re-run `amplifier-online up` to regenerate the configuration if needed

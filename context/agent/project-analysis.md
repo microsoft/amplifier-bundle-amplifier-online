@@ -151,7 +151,7 @@ glob("**/staticwebapp.config.json")
 
 | Section | Check for | If missing |
 |---------|-----------|------------|
-| `auth.identityProviders.azureActiveDirectory` | `clientIdSettingName` and `openIdIssuerUri` | **Critical** — SWA login will not be pinned to the project's Entra app registration or tenant. Recommend merging in the `auth` block. |
+| `auth.identityProviders.azureActiveDirectory` | `clientIdSettingName` and `openIdIssuer` | **Critical** — SWA login will not be pinned to the project's Entra app registration or tenant. Recommend merging in the `auth` block. |
 | `routes` with `allowedRoles: ["authenticated"]` | At least one `/*` route requiring authentication | Auth routing won't be enforced |
 | `navigationFallback` with `rewrite: "/index.html"` | SPA fallback routing | SPA deep links will 404 on refresh |
 | `globalHeaders` with CSP | `connect-src` includes `https://login.microsoftonline.com`; `frame-src` includes `https://login.microsoftonline.com` | MSAL.js token acquisition and silent renewal will be blocked |
@@ -164,7 +164,7 @@ else in the file):
   "identityProviders": {
     "azureActiveDirectory": {
       "registration": {
-        "openIdIssuerUri": "https://login.microsoftonline.com/{tenant-id}/v2.0",
+        "openIdIssuer": "https://login.microsoftonline.com/{tenant-id}/v2.0",
         "clientIdSettingName": "AZURE_CLIENT_ID"
       }
     }

@@ -591,7 +591,7 @@ for authentication instead of the EasyAuth sidecar used by ACA stacks.
 
 **How it works:**
 - `amplifier-online init` generates `staticwebapp.config.json` automatically for SWA stacks
-- The file configures the AAD identity provider with `openIdIssuerUri` pinned to the tenant
+- The file configures the AAD identity provider with `openIdIssuer` pinned to the tenant
   and `clientIdSettingName: "AZURE_CLIENT_ID"`
 - Key settings are `AZURE_CLIENT_ID` (the SWA's `-client` appId) and `AZURE_TENANT_ID`
 
