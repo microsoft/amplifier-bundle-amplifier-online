@@ -146,7 +146,6 @@ resources:
 - Uses `services:` map — keys are service names (any name works)
 - **Web services** always get EasyAuth with `RedirectToLoginPage` — use `auth_exclude` for path exclusions (e.g., proxied API calls)
 - **API services** never get EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation
-- Per-service `auth` field controls Entra identity (implied `true` for web and API roles)
 - **Two Entra registrations, split by OAuth role:** `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience, `api://{apiClientId}`, exposes `access_as_user` + APIM since user-facing). Frontend gets `AZURE_CLIENT_ID` (the `-client`) + `AZURE_API_CLIENT_ID` (the `-api`, audience for `api://{AZURE_API_CLIENT_ID}/access_as_user`); backend gets `AZURE_CLIENT_ID` = the `-api`
 - Volumes attach per-service (not under `resources`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode). This is required for safe
@@ -212,7 +211,6 @@ frontend:                # ← separate because Static Web App is not a containe
   output_location: "dist"        # ← build output dir (must match vite/webpack config)
   build_command: "npm run build" # ← optional, defaults to "npm run build"
   protected: login               # ← always enforced — sign-in required
-  # auth: true                   # ← implied by protected: login
 
 resources:
   postgres:
@@ -314,12 +312,11 @@ frontend:
   build_command: "npm run build" # ← optional, defaults to "npm run build"
   api_location: "api"            # ← optional: serverless functions directory
   protected: login               # ← always enforced — sign-in required
-  # auth: true                   # ← implied by protected: login
 ```
 
 **Frontend auth:**
 - `protected: login` — always enforced. Sign-in required via `staticwebapp.config.json` route rules.
-- `auth: true` — implied by `protected: login`. Registers the `ao-{project}-client` login app (no `-api`) and injects auth env vars for MSAL.js. Token acquisition for external APIs (e.g. Microsoft Graph) uses those APIs' own scopes.
+- The platform registers the `ao-{project}-client` login app (no `-api`) and injects auth env vars for MSAL.js. Token acquisition for external APIs (e.g. Microsoft Graph) uses those APIs' own scopes.
 
 **Auth environment variables (SWA-specific):**
 

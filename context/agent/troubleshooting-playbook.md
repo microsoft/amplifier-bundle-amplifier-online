@@ -447,8 +447,8 @@ Common causes:
    cryptography>=41.0.0
    ```
 
-4. Ensure the service has `auth: true` in the manifest (default for API services) so that
-   `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables are injected.
+4. A backend API service is always given a `-api` registration, so `AZURE_CLIENT_ID` (the
+   `-api` appId) and `AZURE_TENANT_ID` are injected — confirm the middleware reads them.
 
 5. Rebuild, push, and redeploy:
    ```bash

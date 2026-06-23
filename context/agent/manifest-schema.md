@@ -34,7 +34,6 @@ services:
     # API services (role: api) never get EasyAuth — use JWT middleware for token validation.
     # The 'protected' field is DEPRECATED — auth is determined by the service role.
     auth_exclude: [<paths>]   # (web services only) Path prefixes excluded from EasyAuth (e.g., ["/api"])
-    auth: <bool>              # Whether service needs AAD identity (default: true for web/api roles)
     env:                      # Optional environment variables
       - name: <env-var-name>
         value: <env-var-value>
@@ -52,7 +51,6 @@ frontend:
   build_command: <command>
   api_location: <path>           # Optional: serverless functions directory (static-web-app only)
   protected: login               # Always 'login' — SWA frontends always require sign-in
-  auth: <bool>                   # Whether frontend needs AAD identity (default: true when protected is set)
 
 # Optional: cross-project / bring-your-own auth registrations (all fields optional)
 auth:
@@ -166,13 +164,6 @@ services:
     auth_exclude: ["/api", "/webhooks"]   # EasyAuth skips these path prefixes
 ```
 
-### `services.<name>.auth`
-- **Optional.** Whether the service needs an AAD (Entra) identity.
-- Implied `true` for web and API services (both need an Entra app registration).
-- Set explicitly to `true` if a worker service needs AAD identity
-  (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
-- The orchestrator skips Entra app registration entirely when no service or frontend has auth enabled.
-
 ### `services.<name>.volume`
 - **Optional.** Attaches a persistent volume to a service.
 - `mount_path` — path inside the container where the volume is mounted.
@@ -216,17 +207,8 @@ appropriate because only one process ever writes.
 ### `frontend.protected`
 - **Always `login`.** All browser-facing frontends require sign-in — this is enforced by the platform.
 - `login` — require sign-in via `staticwebapp.config.json` route enforcement
-- When `protected` is `login`, `auth` is implied `true` (Entra app registration created).
+- A frontend always gets a `-client` login registration; `AZURE_CLIENT_ID` is injected for MSAL.js.
 - Setting `protected: false` on a frontend is deprecated and will be rejected in a future release.
-
-### `frontend.auth`
-- **Optional.** Whether the frontend needs an AAD (Entra) identity.
-- Implied `true` when `protected != false`.
-- Set explicitly to `true` if the frontend needs MSAL.js token acquisition without route-level
-  authentication enforcement (e.g., a SPA that acquires tokens for API calls but doesn't require
-  sign-in to view the page).
-- When enabled, the orchestrator registers an Entra app and injects `AZURE_CLIENT_ID` into
-  the Static Web App environment for MSAL.js consumption.
 
 ### `auth` (top-level — registration model)
 
@@ -344,7 +326,6 @@ frontend:
   output_location: "dist"
   build_command: "npm run build"
   protected: login               # always enforced — require sign-in
-  # auth: true                   # implied by protected: login
 
 resources:
   postgres:
@@ -371,7 +352,6 @@ frontend:
   output_location: "dist"
   build_command: "npm run build"
   protected: login               # always enforced — require sign-in
-  # auth: true                   # implied by protected: login
 ```
 
 ### Stack: internal-service-aca (internal API)
@@ -425,20 +405,6 @@ resources:
     enabled: false
   storage:
     enabled: false
-```
-
-### No auth (public API)
-
-```yaml
-name: public-api
-stack: web-app-aca
-
-services:
-  api:
-    image: amplifieronlinecr.azurecr.io/public-api:latest
-    port: 8000
-    auth: false              # Explicitly opt out of AAD identity
-    # No EasyAuth, no JWT middleware, no Entra app registration
 ```
 
 ---

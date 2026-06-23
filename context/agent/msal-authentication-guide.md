@@ -511,7 +511,7 @@ The frontend ids are written to `/auth-config.json` by the container entrypoint 
 `apiClientId`, `tenantId`, `consumes`).
 
 **Static Web App frontends (`web-app-awa`, `static-web-app`):** Frontends always have
-`protected: login` enforced, which implies `auth: true`. SWAs are **client-only** — they get a
+`protected: login` enforced. SWAs are **client-only** — they get a
 `-client` registration but no `-api` and no `access_as_user`; they call external APIs (e.g.
 Microsoft Graph) with those APIs' own scopes. `amplifier-online cicd create` injects
 `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` (plus `VITE_AZURE_API_CLIENT_ID` / `VITE_AO_CONSUMES`
