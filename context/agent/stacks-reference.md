@@ -359,7 +359,7 @@ platform expects. **Always audit** the existing file against this checklist:
 
 | Section | Required? | What to check |
 |---------|-----------|---------------|
-| `auth.identityProviders` | **Yes** | Must contain `azureActiveDirectory` with `openIdIssuerUri` (pinned to tenant) and `clientIdSettingName: "AZURE_CLIENT_ID"`. Without this, SWA falls back to its built-in multi-tenant AAD app — login is not pinned to the project's Entra registration or tenant. |
+| `auth.identityProviders` | **Yes** | Must contain `azureActiveDirectory` with `openIdIssuer` (pinned to tenant) and `clientIdSettingName: "AZURE_CLIENT_ID"`. Without this, SWA falls back to its built-in multi-tenant AAD app — login is not pinned to the project's Entra registration or tenant. |
 | `routes` | **Yes** | Must have `"route": "/*", "allowedRoles": ["authenticated"]` to enforce login. Explicitly unprotecting `/.auth/*` is a best practice. |
 | `navigationFallback` | **Yes** (for SPAs) | Must rewrite to `index.html`. The `exclude` patterns should match the build tool's actual output (Vite uses `/assets/*`, not generic `/images/*`, `/css/*`, `/js/*`). |
 | `responseOverrides` | Recommended | 401 → redirect to `/.auth/login/aad`. Adding `?post_login_redirect_uri=/` improves UX. |
@@ -372,7 +372,7 @@ platform expects. **Always audit** the existing file against this checklist:
   "identityProviders": {
     "azureActiveDirectory": {
       "registration": {
-        "openIdIssuerUri": "https://login.microsoftonline.com/{tenant-id}/v2.0",
+        "openIdIssuer": "https://login.microsoftonline.com/{tenant-id}/v2.0",
         "clientIdSettingName": "AZURE_CLIENT_ID"
       }
     }
@@ -382,7 +382,7 @@ platform expects. **Always audit** the existing file against this checklist:
 
 The `clientIdSettingName` tells SWA to read the app setting named `AZURE_CLIENT_ID` (injected by
 the Bicep template) and use it as the OAuth client ID for the built-in AAD login flow. The
-`openIdIssuerUri` pins login to a specific tenant — without it, any Microsoft account can log in.
+`openIdIssuer` pins login to a specific tenant — without it, any Microsoft account can log in.
 
 > **User configs are often better than platform-generated ones.** The platform generates a minimal
 > `staticwebapp.config.json` with no security headers, generic exclude patterns, and no
