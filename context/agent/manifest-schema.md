@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, `frontend`, and `resources`.
+> `services`, `frontend`, `auth`, and `resources`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -34,7 +34,6 @@ services:
     # API services (role: api) never get EasyAuth — use JWT middleware for token validation.
     # The 'protected' field is DEPRECATED — auth is determined by the service role.
     auth_exclude: [<paths>]   # (web services only) Path prefixes excluded from EasyAuth (e.g., ["/api"])
-    auth: <bool>              # Whether service needs AAD identity (default: true for web/api roles)
     env:                      # Optional environment variables
       - name: <env-var-name>
         value: <env-var-value>
@@ -52,7 +51,16 @@ frontend:
   build_command: <command>
   api_location: <path>           # Optional: serverless functions directory (static-web-app only)
   protected: login               # Always 'login' — SWA frontends always require sign-in
-  auth: <bool>                   # Whether frontend needs AAD identity (default: true when protected is set)
+
+# Optional: cross-project / bring-your-own auth registrations (all fields optional)
+auth:
+  client_app_id: <appId>     # Reuse an existing -client (login) registration instead of creating ao-{project}-client
+  api_app_id: <appId>        # Reuse an existing -api (audience) registration instead of creating ao-{project}-api
+  expose: <bool>             # This project's API serves delegated users from OTHER projects
+  consumes:                  # APIs this project's client calls cross-project
+    - <other-project>        # First-party: resolves to ao-<other-project>-api
+    - api_app_id: <guid>     # External/BYO producer
+      base_url: https://api.example/
 
 # Optional: resource flags (defaults to all disabled)
 resources:
@@ -156,13 +164,6 @@ services:
     auth_exclude: ["/api", "/webhooks"]   # EasyAuth skips these path prefixes
 ```
 
-### `services.<name>.auth`
-- **Optional.** Whether the service needs an AAD (Entra) identity.
-- Implied `true` for web and API services (both need an Entra app registration).
-- Set explicitly to `true` if a worker service needs AAD identity
-  (e.g., a service that calls Microsoft Graph or other AAD-protected APIs).
-- The orchestrator skips Entra app registration entirely when no service or frontend has auth enabled.
-
 ### `services.<name>.volume`
 - **Optional.** Attaches a persistent volume to a service.
 - `mount_path` — path inside the container where the volume is mounted.
@@ -206,17 +207,26 @@ appropriate because only one process ever writes.
 ### `frontend.protected`
 - **Always `login`.** All browser-facing frontends require sign-in — this is enforced by the platform.
 - `login` — require sign-in via `staticwebapp.config.json` route enforcement
-- When `protected` is `login`, `auth` is implied `true` (Entra app registration created).
+- A frontend always gets a `-client` login registration; `AZURE_CLIENT_ID` is injected for MSAL.js.
 - Setting `protected: false` on a frontend is deprecated and will be rejected in a future release.
 
-### `frontend.auth`
-- **Optional.** Whether the frontend needs an AAD (Entra) identity.
-- Implied `true` when `protected != false`.
-- Set explicitly to `true` if the frontend needs MSAL.js token acquisition without route-level
-  authentication enforcement (e.g., a SPA that acquires tokens for API calls but doesn't require
-  sign-in to view the page).
-- When enabled, the orchestrator registers an Entra app and injects `AZURE_CLIENT_ID` into
-  the Static Web App environment for MSAL.js consumption.
+### `auth` (top-level — registration model)
+
+Registrations are named by OAuth role, not one per project:
+- **`ao-{project}-client`** (login) — created iff the project has a frontend (a `web` service or a
+  `frontend` section).
+- **`ao-{project}-api`** (API audience) — created iff the project hosts a backend API.
+
+So `static-web-app` gets `-client` only; `internal-service-aca` gets `-api` only; a web-app with both
+gets both. The `auth:` block (all fields optional) overrides or extends this:
+
+- `client_app_id` — reuse an existing `-client` registration (BYO) instead of creating one.
+- `api_app_id` — reuse an existing `-api` registration (BYO) instead of creating one.
+- `expose` — set `true` when this project's API serves delegated users from other projects.
+- `consumes` — APIs this project's client calls cross-project. A bare string is a first-party
+  project name (resolves to `ao-<name>-api`); a `{api_app_id, base_url}` entry is an external/BYO producer.
+
+BYO (per-role) registrations are validated read-only on `up`, never created, and are skipped by `destroy`.
 
 ### `resources`
 - **Optional** (all disabled by default).
@@ -316,7 +326,6 @@ frontend:
   output_location: "dist"
   build_command: "npm run build"
   protected: login               # always enforced — require sign-in
-  # auth: true                   # implied by protected: login
 
 resources:
   postgres:
@@ -343,7 +352,6 @@ frontend:
   output_location: "dist"
   build_command: "npm run build"
   protected: login               # always enforced — require sign-in
-  # auth: true                   # implied by protected: login
 ```
 
 ### Stack: internal-service-aca (internal API)
@@ -356,8 +364,9 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-internal-service-api:latest
     port: 8000
-    # No EasyAuth, no Entra app registration
-    # Authenticate callers via JWT middleware or managed identity tokens
+    # No EasyAuth; gets a single -api audience registration (ao-{project}-api,
+    # no access_as_user, no APIM). Authenticate callers via JWT middleware or
+    # managed identity tokens.
     env:
       - name: LOG_LEVEL
         value: info
@@ -398,20 +407,6 @@ resources:
     enabled: false
 ```
 
-### No auth (public API)
-
-```yaml
-name: public-api
-stack: web-app-aca
-
-services:
-  api:
-    image: amplifieronlinecr.azurecr.io/public-api:latest
-    port: 8000
-    auth: false              # Explicitly opt out of AAD identity
-    # No EasyAuth, no JWT middleware, no Entra app registration
-```
-
 ---
 
 ## Stack-Specific Requirements
@@ -435,7 +430,7 @@ services:
 | Requirement | Rule |
 |-------------|------|
 | Services | Required: single API service with `image`, `port` |
-| Auth | No EasyAuth, no Entra app registration. Service-to-service auth via JWT middleware or managed identity tokens. |
+| Auth | No EasyAuth. Gets a single `-api` audience registration (`ao-{project}-api`; no `access_as_user`, no APIM). Service-to-service auth via JWT middleware or managed identity tokens. |
 | Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
 | Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |

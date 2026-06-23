@@ -300,7 +300,7 @@ Markers:
 **Reasoning:**
 - Internal-only microservice or worker -- no public ingress needed
 - Container Apps Environment provides internal DNS for service-to-service calls
-- No EasyAuth overhead, no Entra app registration needed
+- No EasyAuth overhead; gets an `-api` registration only (no `-client`), and `access_as_user`/APIM are exposed only if user-facing (`auth.expose: true`)
 - Service-to-service auth via JWT middleware or managed identity tokens
 - Same optional resources (postgres, cosmos, redis, storage) as `web-app-aca`
 
