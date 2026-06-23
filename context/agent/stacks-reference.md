@@ -69,7 +69,7 @@ Available deployment stacks:
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
 - **Networking** — automatic DNS, TLS certificates, ingress rules, container-to-container communication
-- **Authentication** — EasyAuth on web frontends (RedirectToLoginPage, always enforced); JWT middleware on API backends (token validation)
+- **Authentication** — EasyAuth on web frontends (RedirectToLoginPage, always enforced); JWT middleware on API backends (token validation). Two Entra registrations: `ao-{project}-client` (login/MSAL.js client) and `ao-{project}-api` (audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability** — Application Insights (workspace-based)
 
 ### Best for
@@ -147,6 +147,7 @@ resources:
 - **Web services** always get EasyAuth with `RedirectToLoginPage` — use `auth_exclude` for path exclusions (e.g., proxied API calls)
 - **API services** never get EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation
 - Per-service `auth` field controls Entra identity (implied `true` for web and API roles)
+- **Two Entra registrations, split by OAuth role:** `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience, `api://{apiClientId}`, exposes `access_as_user` + APIM since user-facing). Frontend gets `AZURE_CLIENT_ID` (the `-client`) + `AZURE_API_CLIENT_ID` (the `-api`, audience for `api://{AZURE_API_CLIENT_ID}/access_as_user`); backend gets `AZURE_CLIENT_ID` = the `-api`
 - Volumes attach per-service (not under `resources`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode). This is required for safe
   filesystem access over Azure Files (SMB). If using SQLite on a volume, see the
@@ -166,7 +167,7 @@ resources:
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
-- **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation)
+- **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
 
 ### Best for
@@ -234,7 +235,7 @@ resources:
 - Uses `services:` for the backend container (same pattern as `web-app-aca`) plus `frontend:` for the Static Web App.
 - **API backend** never gets EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation.
 - **SWA frontend** always gets authentication enforced via `staticwebapp.config.json` route rules (`protected: login`).
-- The orchestrator checks both services and frontend when deciding whether to create an Entra app registration.
+- **Two Entra registrations:** `ao-{project}-client` (frontend login) and `ao-{project}-api` (backend audience, `access_as_user` + APIM). Frontend gets `AZURE_CLIENT_ID` (the `-client`) + `AZURE_API_CLIENT_ID` (the `-api`); backend gets `AZURE_CLIENT_ID` = the `-api`.
 - Volumes are supported on the API service. Add `volume` with `mount_path` and `size_gib`
   under `services.api:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
   — this is an Azure Web App platform requirement. The platform enforces single-instance
@@ -272,7 +273,7 @@ app.add_middleware(
 
 - **Frontend:** Azure Static Web App with GitHub integration
 - **Optional serverless API:** Azure Functions (if `api_location` specified)
-- **Authentication:** EasyAuth with Entra ID (login always enforced via `staticwebapp.config.json` route rules)
+- **Authentication:** EasyAuth with Entra ID (login always enforced via `staticwebapp.config.json` route rules). One Entra registration: `ao-{project}-client` ONLY (no `-api`, no `access_as_user`) — it calls external APIs (e.g. Microsoft Graph) with their own scopes
 - **No databases:** This stack does not support PostgreSQL, Cosmos, Redis, or Storage
 
 ### Best for
@@ -318,7 +319,7 @@ frontend:
 
 **Frontend auth:**
 - `protected: login` — always enforced. Sign-in required via `staticwebapp.config.json` route rules.
-- `auth: true` — implied by `protected: login`. Registers Entra app and injects auth env vars for MSAL.js token acquisition.
+- `auth: true` — implied by `protected: login`. Registers the `ao-{project}-client` login app (no `-api`) and injects auth env vars for MSAL.js. Token acquisition for external APIs (e.g. Microsoft Graph) uses those APIs' own scopes.
 
 **Auth environment variables (SWA-specific):**
 
@@ -434,7 +435,7 @@ frontend:
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
 - **Networking** -- internal DNS only (`<project>-api.internal.<env-default-domain>`), reachable only within the Container Apps Environment; no public FQDN
-- **Authentication** -- no EasyAuth, no Entra app registration; service-to-service auth via JWT middleware or managed identity tokens
+- **Authentication** -- no EasyAuth, no login client; one Entra registration `ao-{project}-api` (audience only, internal posture: no `access_as_user`, no APIM). Service-to-service auth via JWT middleware or managed identity tokens
 - **Observability** -- Application Insights (workspace-based)
 
 ### Best for
@@ -449,7 +450,7 @@ frontend:
 - Public ingress (no browser-facing traffic)
 - EasyAuth or CORS (no browser auth flows)
 - Frontend containers or static web apps
-- Entra app registration (no MSAL.js, no SSO)
+- Login client (`-client`), MSAL.js, or SSO — only an audience-only `ao-{project}-api` registration (no `access_as_user`, no APIM)
 
 **Need public access?** Use `web-app-aca` instead.
 
@@ -486,7 +487,7 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-internal-service-api:latest
     port: 8000               # <-- must match the port your API listens on
-    # No EasyAuth, no Entra app registration
+    # No EasyAuth, no login client; audience-only ao-{project}-api registration
     # Authenticate callers via JWT middleware or managed identity tokens
     env:
       - name: LOG_LEVEL
@@ -506,7 +507,7 @@ resources:
 **Key concepts:**
 - Uses `services:` map -- single API service (no `web` or `frontend` service)
 - **No EasyAuth, no CORS, no public FQDN** -- the container is only reachable within the CAE
-- **No Entra app registration** -- no browser auth flows; callers authenticate via service-to-service patterns
+- **Audience-only Entra registration** -- `ao-{project}-api` (no login client, no `access_as_user`, no APIM); no browser auth flows, callers authenticate via service-to-service patterns
 - **Internal DNS** -- the container is reachable at `<project>-api.internal.<env-default-domain>` from other containers in the same CAE
 - Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode).

@@ -143,9 +143,11 @@ amplifier-online init --stack internal-service-aca  # Internal-only Container Ap
 ## `amplifier-online up`
 
 Deploy the project defined in `amplifier-online.yaml`. The Provisioner Service:
-1. Creates or updates the Entra app registration (if any service or frontend has auth configured)
+1. Creates or validates the role-based registrations the project needs — `ao-{project}-client`
+   (if it has a frontend) and/or `ao-{project}-api` (if it hosts an API). If a BYO appId is set
+   per role (`auth.client_app_id` / `auth.api_app_id`), that role is validated read-only instead of created.
 2. Deploys the Bicep template for the selected stack
-3. Configures EasyAuth redirect URIs (if any service or frontend has auth configured)
+3. Configures EasyAuth redirect URIs (for web services / frontends)
 
 ```bash
 amplifier-online up            # Deploy for real
@@ -188,8 +190,9 @@ amplifier-online logs --container api    # Only the api container
 
 ## `amplifier-online destroy`
 
-Tear down all per-project resources: container apps, databases, storage, and the Entra app
-registration. Prompts for confirmation unless `--dry-run` is used.
+Tear down all per-project resources: container apps, databases, storage, and the platform-created
+role registrations (`ao-{project}-client` / `ao-{project}-api`). BYO (per-role) registrations are
+skipped. Prompts for confirmation unless `--dry-run` is used.
 
 ```bash
 amplifier-online destroy            # With confirmation prompt
@@ -214,8 +217,13 @@ amplifier-online cicd create --dry-run  # Preview without writing
 - `.github/workflows/api-build-deploy.yaml`
 - `.github/workflows/web-build-deploy.yaml`
 
-**Required GitHub secrets (must be set after generating):**
-- `AZURE_CLIENT_ID`
+**Auth variables (resolved and set automatically):** `cicd create` resolves the project's `-client`
+and `-api` appIds (plus any cross-project producer `-api` appIds from `auth.consumes`) and sets them
+as GitHub Actions variables — `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`, and `AO_CONSUMES` — so SWA
+frontend builds receive them. This is separate from the CI/CD deploy identity below.
+
+**Required GitHub secrets (must be set after generating) — the deploy identity:**
+- `AZURE_CLIENT_ID`  (the GitHub-OIDC deploy app — distinct from the project's auth `-client` registration)
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 

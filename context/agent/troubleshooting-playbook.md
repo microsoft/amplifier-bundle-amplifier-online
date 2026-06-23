@@ -458,7 +458,8 @@ Common causes:
    ```
 
 **Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
-API service's responsibility via JWT middleware. The middleware validates signatures against
+API service's responsibility via JWT middleware. On the backend, `AZURE_CLIENT_ID` is the
+project's `-api` registration (`ao-{project}-api`). The middleware validates signatures against
 Entra's JWKS endpoint, checks audience (`api://{AZURE_CLIENT_ID}`), issuer, and expiry, and
 extracts user identity from JWT claims.
 
@@ -574,39 +575,37 @@ apply to API services, which do not have EasyAuth.
 
 ---
 
-## Failure Mode 16: BYOA Validation Failed
+## Failure Mode 16: BYO Registration Validation Failed
 
-**Applies to:** All stacks when `auth.client_id` is set in `amplifier-online.yaml`.
+**Applies to:** All stacks when `auth.client_app_id` or `auth.api_app_id` is set in `amplifier-online.yaml`.
 
-**Symptom:** `amplifier-online up` fails immediately with:
+**Symptom:** `amplifier-online up` fails immediately with, for a BYO `-api`:
 ```
-App registration 'your-client-id' is missing required configuration:
-  - Missing identifier URI. Expected 'api://your-client-id' in identifierUris.
+App registration 'your-api-app-id' is missing required configuration:
+  - Missing identifier URI. Expected 'api://your-api-app-id' in identifierUris.
   - Missing 'access_as_user' OAuth2 permission scope.
 ```
 
 **Diagnostic:**
 ```bash
-grep -A2 "auth:" amplifier-online.yaml    # Confirm auth.client_id is set
+grep -A2 "auth:" amplifier-online.yaml    # Confirm auth.client_app_id / auth.api_app_id are set
 ```
 
-**Root cause:** The user-provided app registration does not meet the minimum requirements for
-the platform. The provisioner validates two things as hard errors:
+**Root cause:** BYO is **per role** and validation is role-aware and read-only. A BYO `-api`
+(`api_app_id`) that is user-facing must expose `api://{api_app_id}` + `access_as_user` for JWT
+audience validation and MSAL.js token acquisition; an internal `-api` exposes neither. A BYO
+`-client` (`client_app_id`) is a login client and is **not** required to expose `access_as_user`.
+A warning (non-blocking) is emitted if `requestedAccessTokenVersion` is not `2`.
 
-1. **Missing identifier URI** (`api://{client_id}`) -- required for EasyAuth/JWT audience validation.
-2. **Missing `access_as_user` scope** -- required for MSAL.js token acquisition.
-
-A warning (non-blocking) is also emitted if `requestedAccessTokenVersion` is not `2`.
-
-**Fix:**
-1. In Azure Portal > App registrations > your app > **Expose an API**:
-   - Set Application ID URI to `api://{your-client-id}`
+**Fix (user-facing `-api` only):**
+1. In Azure Portal > App registrations > your `-api` app > **Expose an API**:
+   - Set Application ID URI to `api://{your-api-app-id}`
    - Add a scope with value `access_as_user` (type: Users and admins)
 2. Optionally, set `requestedAccessTokenVersion` to `2` in the app manifest
 3. Re-run `amplifier-online up`
 
-**Note:** The provisioner never modifies a BYOA app registration. It also skips deletion on
-`amplifier-online destroy`. Redirect URIs are printed post-deployment but not auto-configured.
+**Note:** The provisioner never modifies a BYO registration. It also skips deletion of BYO
+registrations on `amplifier-online destroy`. Redirect URIs are printed post-deployment but not auto-configured.
 
 ---
 
@@ -628,12 +627,13 @@ client ID baked in that no longer exists in Entra ID.
 # Check what GitHub repo variables the CI/CD workflow is using
 gh variable list --repo <owner>/<repo>
 
-# Compare with the actual app registration
-az ad app list --display-name ao-<project>-app --query "[].appId" -o tsv
+# Compare with the actual login client registration
+az ad app list --display-name ao-<project>-client --query "[].appId" -o tsv
 ```
 
-If `AZURE_CLIENT_ID` in the GitHub variables doesn't match the app registration's `appId`,
-the variables are stale.
+If the frontend's `AZURE_CLIENT_ID` GitHub variable (the login `-client` appId) doesn't match
+the registration's `appId`, the variables are stale. (This is the project's MSAL.js login client,
+not the CI/CD deploy identity's `AZURE_CLIENT_ID` GitHub-OIDC app.)
 
 **Root cause:** `amplifier-online up` creates/updates Entra app registrations and sets SWA/Container
 App settings correctly, but it does **not** update GitHub repository variables. The CI/CD workflow
@@ -686,6 +686,35 @@ az staticwebapp appsettings list --name <swa-name>
    pinned to the tenant (e.g., `https://login.microsoftonline.com/<tenant-id>/v2.0`)
 2. Verify SWA app settings include both `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
 3. Re-run `amplifier-online up` to regenerate the configuration if needed
+
+---
+
+## Failure Mode 18: Consumer Deployed Before Producer (`auth.consumes`)
+
+**Applies to:** Any project with `auth.consumes: [...]` referencing another project by name.
+
+**Symptom:** `amplifier-online up` fails to wire cross-project access, or the consumer's calls
+to the producer API are rejected (401/invalid audience):
+```
+Error: producer project 'other-project' not found / not deployed
+Consumer token rejected: application not pre-authorized for api://<producer-api>/access_as_user
+```
+
+**Diagnostic:**
+```bash
+grep -A2 "consumes:" amplifier-online.yaml    # See which producer(s) this consumer references
+```
+
+**Root cause:** The producer (which must set `auth.expose: true`) must be **deployed first**.
+The platform wires the consumer's `-client` requiredResourceAccess to the producer's
+`access_as_user` and adds it to the producer's `preAuthorizedApplications` — which requires the
+producer's `-api` to already exist.
+
+**Fix:**
+1. Deploy the producer first (`auth.expose: true`), then the consumer.
+2. If the platform does not own the producer, it warns — the producer owner must add the
+   consumer to its `-api` preAuthorizedApplications manually. (For a BYO producer, pass the
+   producer via `auth.consumes: [{api_app_id, base_url}]`.)
 
 ---
 

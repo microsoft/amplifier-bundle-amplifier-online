@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, `frontend`, and `resources`.
+> `services`, `frontend`, `auth`, and `resources`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -53,6 +53,16 @@ frontend:
   api_location: <path>           # Optional: serverless functions directory (static-web-app only)
   protected: login               # Always 'login' — SWA frontends always require sign-in
   auth: <bool>                   # Whether frontend needs AAD identity (default: true when protected is set)
+
+# Optional: cross-project / bring-your-own auth registrations (all fields optional)
+auth:
+  client_app_id: <appId>     # Reuse an existing -client (login) registration instead of creating ao-{project}-client
+  api_app_id: <appId>        # Reuse an existing -api (audience) registration instead of creating ao-{project}-api
+  expose: <bool>             # This project's API serves delegated users from OTHER projects
+  consumes:                  # APIs this project's client calls cross-project
+    - <other-project>        # First-party: resolves to ao-<other-project>-api
+    - api_app_id: <guid>     # External/BYO producer
+      base_url: https://api.example/
 
 # Optional: resource flags (defaults to all disabled)
 resources:
@@ -218,6 +228,24 @@ appropriate because only one process ever writes.
 - When enabled, the orchestrator registers an Entra app and injects `AZURE_CLIENT_ID` into
   the Static Web App environment for MSAL.js consumption.
 
+### `auth` (top-level — registration model)
+
+Registrations are named by OAuth role, not one per project:
+- **`ao-{project}-client`** (login) — created iff the project has a frontend (a `web` service or a
+  `frontend` section).
+- **`ao-{project}-api`** (API audience) — created iff the project hosts a backend API.
+
+So `static-web-app` gets `-client` only; `internal-service-aca` gets `-api` only; a web-app with both
+gets both. The `auth:` block (all fields optional) overrides or extends this:
+
+- `client_app_id` — reuse an existing `-client` registration (BYO) instead of creating one.
+- `api_app_id` — reuse an existing `-api` registration (BYO) instead of creating one.
+- `expose` — set `true` when this project's API serves delegated users from other projects.
+- `consumes` — APIs this project's client calls cross-project. A bare string is a first-party
+  project name (resolves to `ao-<name>-api`); a `{api_app_id, base_url}` entry is an external/BYO producer.
+
+BYO (per-role) registrations are validated read-only on `up`, never created, and are skipped by `destroy`.
+
 ### `resources`
 - **Optional** (all disabled by default).
 - **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, and `web-app-awa`)
@@ -356,8 +384,9 @@ services:
   api:
     image: amplifieronlinecr.azurecr.io/my-internal-service-api:latest
     port: 8000
-    # No EasyAuth, no Entra app registration
-    # Authenticate callers via JWT middleware or managed identity tokens
+    # No EasyAuth; gets a single -api audience registration (ao-{project}-api,
+    # no access_as_user, no APIM). Authenticate callers via JWT middleware or
+    # managed identity tokens.
     env:
       - name: LOG_LEVEL
         value: info
@@ -435,7 +464,7 @@ services:
 | Requirement | Rule |
 |-------------|------|
 | Services | Required: single API service with `image`, `port` |
-| Auth | No EasyAuth, no Entra app registration. Service-to-service auth via JWT middleware or managed identity tokens. |
+| Auth | No EasyAuth. Gets a single `-api` audience registration (`ao-{project}-api`; no `access_as_user`, no APIM). Service-to-service auth via JWT middleware or managed identity tokens. |
 | Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
 | Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |

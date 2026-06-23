@@ -207,6 +207,23 @@ AZURE_STATIC_WEB_APPS_API_TOKEN  # Get from Azure Portal (Static Web App → Man
 2. Click **Manage deployment token**
 3. Copy and add to GitHub repository secrets
 
+### Frontend build-time variables (not secrets) — `web-app-awa` frontend, `static-web-app`
+
+These are GitHub Actions **variables** (`vars.*`), not secrets. `amplifier-online cicd create` sets
+them by resolving the project's `-client` and `-api` appIds (plus any `auth.consumes` producer `-api`
+appIds), and the SWA/AWA frontend workflows pass them in as `VITE_*` at build time:
+
+| Variable | What it is | Passed to build as |
+|----------|-----------|--------------------|
+| `AZURE_CLIENT_ID` | `ao-{project}-client` appId (login client) | `VITE_AZURE_CLIENT_ID` |
+| `AZURE_API_CLIENT_ID` | `ao-{project}-api` appId (API audience for `api://.../access_as_user`) | `VITE_AZURE_API_CLIENT_ID` |
+| `AZURE_TENANT_ID` | Entra tenant ID | `VITE_AZURE_TENANT_ID` |
+| `AO_CONSUMES` | JSON map of cross-project consumed APIs (`auth.consumes` producer `-api` appIds) | `VITE_AO_CONSUMES` |
+
+**Note:** this `AZURE_CLIENT_ID` *variable* (the login client) is distinct from the `AZURE_CLIENT_ID`
+*secret* above (the GitHub-OIDC deploy identity). `static-web-app` is client-only, so its
+`AZURE_API_CLIENT_ID` is empty unless it consumes external APIs via `AO_CONSUMES`.
+
 ---
 
 ## Federated Credentials Setup
@@ -344,7 +361,11 @@ env:
 ```yaml
 env:
   AZURE_STATIC_WEB_APPS_API_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-  # Other configuration comes from amplifier-online.yaml
+  # Build-time auth ids come from GitHub Actions variables (set by `cicd create`):
+  VITE_AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}          # ao-{project}-client (login)
+  VITE_AZURE_API_CLIENT_ID: ${{ vars.AZURE_API_CLIENT_ID }}  # ao-{project}-api audience
+  VITE_AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  VITE_AO_CONSUMES: ${{ vars.AO_CONSUMES }}                  # JSON map of consumed APIs
 ```
 
 ---
@@ -368,6 +389,7 @@ After running `amplifier-online cicd create`:
 
 - [ ] Set `AZURE_STATIC_WEB_APPS_API_TOKEN` secret in GitHub
 - [ ] Get token from Azure Portal → Static Web App → Manage deployment token
+- [ ] Confirm build-time **variables** `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`, `AZURE_TENANT_ID`, `AO_CONSUMES` are set (`cicd create` populates these; they are `vars.*`, not secrets)
 - [ ] Confirm `output_location` in `amplifier-online.yaml` matches your build tool's actual output
 - [ ] Verify GitHub repository URL in `amplifier-online.yaml` is correct
 - [ ] Test build locally: `npm run build` produces files in the expected output directory
