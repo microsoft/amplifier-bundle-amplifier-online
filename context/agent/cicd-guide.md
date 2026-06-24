@@ -240,6 +240,13 @@ If it's missing, the platform operator sets this up as part of platform provisio
 `setup-identity.sh` script creates the `ao-provisioner` app registration with federated
 credentials. For per-project app registrations, `amplifier-online up` handles this automatically.
 
+> **⚠️ The repo must be in a Microsoft-linked GitHub Enterprise org.** OIDC against this tenant
+> requires the GitHub token to carry the `enterprise` claim. Repos in a personal account or a
+> non-enterprise GitHub org fail with **`AADSTS7002381`** — the federated login is rejected
+> because the token lacks that claim. Move the repo into a GitHub Enterprise org linked to the
+> Microsoft tenant, or deploy manually (`amplifier-online up`) instead of via Actions. See the
+> matching failure mode in `troubleshooting-playbook.md`.
+
 ---
 
 ## Path Filters
@@ -449,6 +456,6 @@ This is beyond the default generated workflows but can be customized.
 ## Related Documentation
 
 For more details on deployment configuration:
-- [Stack Users Guide](../stack-users-guide.md) - Complete guide for all stacks
+- [Stacks Reference](stacks-reference.md) - Complete guide for all stacks
 - [Manifest Schema](manifest-schema.md) - Project configuration reference
 - [CLI Reference](cli-reference.md) - All CLI commands including `cicd create`

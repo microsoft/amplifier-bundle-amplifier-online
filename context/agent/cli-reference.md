@@ -4,7 +4,7 @@ The **Amplifier Online CLI** (`amplifier-online`) is the developer-facing tool f
 projects onto the shared Azure Container Apps infrastructure. Install via:
 
 ```bash
-uv tool install git+https://github.com/payneio/amplifier-online#subdirectory=cli
+uv tool install git+https://github.com/microsoft/amplifier-online#subdirectory=cli
 ```
 
 ---
@@ -42,6 +42,29 @@ If you prefer to use `az login`:
 az login
 amplifier-online stack list  # Will use existing az login session
 ```
+
+### Calling a deployed project's API from a script/CLI
+
+To call a deployed project's API (EasyAuth- or JWT-protected) from a script or the CLI, acquire
+a bearer token for the project's **`-api`** registration audience:
+
+```python
+from azure.identity import DefaultAzureCredential
+
+cred = DefaultAzureCredential()
+token = cred.get_token("api://<api-client-id>/access_as_user")
+# → send as: Authorization: Bearer <token.token>
+```
+
+- The Azure CLI app id `04b07795-8ddb-461a-bbee-02f9e1bf7b46` is pre-authorized on the project's
+  `-api` registration (and on the `web-app-aca` stack it is in the EasyAuth `allowedApplications`
+  list), so `az`/scripts can call the API without triggering an admin-consent prompt.
+- Request the **`api://<api-client-id>/access_as_user`** scope. Requesting the wrong scope (e.g.
+  `https://graph.microsoft.com/.default`, or a bare client id) yields a **401 audience mismatch** —
+  the token's `aud` won't match `api://<api-client-id>`.
+- Wrong-tenant login is a common cause of failures; fix it with `az login --tenant <tenantId>`.
+- If a token still reflects stale roles/groups after a change, clear the token cache — see the
+  cache-clear recipe in `authorization-guide.md`.
 
 ---
 
@@ -147,7 +170,11 @@ Deploy the project defined in `amplifier-online.yaml`. The Provisioner Service:
    (if it has a frontend) and/or `ao-{project}-api` (if it hosts an API). If a BYO appId is set
    per role (`auth.client_app_id` / `auth.api_app_id`), that role is validated read-only instead of created.
 2. Deploys the Bicep template for the selected stack
-3. Configures EasyAuth redirect URIs (for web services / frontends)
+3. Configures EasyAuth redirect URIs (for web services / frontends) — **only for
+   platform-managed registrations. A BYO client app (`auth.client_app_id`) is never
+   modified**: you must enable 'ID tokens' (Implicit grant) and add its redirect URIs
+   yourself. The deploy prints exactly what to add — including the
+   `…/.auth/login/aad/callback` callback — at the end of `up`.
 
 ```bash
 amplifier-online up            # Deploy for real

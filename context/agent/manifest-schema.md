@@ -144,7 +144,7 @@ build images — it deploys whatever tag is currently in the registry.
 > `protected` from all services.
 
 **Legacy values (for reference only):**
-- `validate` — **Removed.** API services no longer use EasyAuth. Use JWT middleware instead.
+- `validate` — **Removed.** API services do not use EasyAuth; use JWT middleware instead.
 - `login` — **Redundant for web services.** Web services always get EasyAuth with `RedirectToLoginPage`.
 - `false` — **Default for API services.** API services never get EasyAuth.
 
@@ -155,6 +155,11 @@ build images — it deploys whatever tag is currently in the registry.
 - Use this when a frontend proxies API calls through the same hostname — without exclusion,
   EasyAuth intercepts those paths and issues a login redirect that `fetch()` cannot follow.
 - `/health` is always excluded by the platform — you do not need to list it.
+
+**Exclusion-matching behavior (common surprises):**
+- **No trailing-slash equivalence.** Excluding `/api` does **not** exclude `/api/`, and excluding `/health` does not exclude `/health/`. List each form you actually serve.
+- **No globs.** Patterns are literal path prefixes — `/api/*` is not special, and each distinct subpath you want excluded must be enumerated.
+- **~60-minute config cache.** The EasyAuth auth proxy caches its config for roughly an hour. After changing `auth_exclude` and redeploying, the change may not take effect until the revision restarts — "I changed it and nothing happened" usually means the old config is still cached.
 
 ```yaml
 services:
@@ -232,11 +237,12 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 - **Optional** (all disabled by default).
 - **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, and `web-app-awa`)
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
-- **postgres**: Adds a database and user on the shared PostgreSQL server; connection string
-  injected as `DATABASE_URL` environment variable
-- **cosmos**: Creates a Cosmos DB database/container; connection string injected as `COSMOS_CONNECTION_STRING`
-- **redis**: Provisions a Redis cache instance; connection injected as `REDIS_CONNECTION_STRING`
-- **storage**: Provisions ADLS Gen2 blob storage; credentials injected as `STORAGE_ACCOUNT_NAME` and `STORAGE_ACCOUNT_KEY`
+- **postgres**: Adds a database and user on the shared PostgreSQL server; injected as
+  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`)
+- **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `COSMOS_KEY`
+- **redis**: Provisions a Redis cache instance; injected as `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`
+- **storage**: Provisions ADLS Gen2 blob storage; injected as `STORAGE_ACCOUNT`, `STORAGE_FILESYSTEM`,
+  `STORAGE_ENDPOINT` — no key is injected, access is via the container's managed identity (RBAC)
 
 ---
 
@@ -500,34 +506,34 @@ registration entirely and these variables are not set.
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | string | Application Insights connection string | Telemetry, logging, metrics |
+| `APPINSIGHTS_INSTRUMENTATION_KEY` | string | Application Insights instrumentation key | Legacy SDK telemetry |
+
+> `static-web-app` has no App Insights — neither telemetry variable is injected for that stack.
+> The `web-app-aca` **web** container also gets `API_BASE_URL` (`https://{api-fqdn}`) and
+> `API_SERVICE_NAME` (`{project}-api`) to reach its sibling API container.
 
 ### Injected When `postgres.enabled: true`
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `DATABASE_URL` | string | Full PostgreSQL connection string | Direct database connection |
-| `DATABASE_HOST` | string | Postgres server FQDN | |
-| `DATABASE_PORT` | string | Port (default: `5432`) | |
-| `DATABASE_NAME` | string | Database name (same as project name) | |
-| `DATABASE_USER` | string | Admin username from global config | |
-| `DATABASE_PASSWORD` | string | Retrieved from Key Vault | |
+| `DB_HOST` | string | Postgres server FQDN | Database connection |
+| `DB_NAME` | string | Database name (project name, `-` → `_`) | |
+| `DB_USER` | string | Admin username from global config | |
+| `DB_PASSWORD` | string | Admin password (see secrets note below) | |
+
+There is **no** `DATABASE_URL` and no port variable (Postgres SSL port is `5432`).
 
 **Example usage (Python with asyncpg):**
 ```python
 import os
 import asyncpg
 
-# Option 1: Use the full connection string
-DATABASE_URL = os.environ["DATABASE_URL"]
-conn = await asyncpg.connect(DATABASE_URL)
-
-# Option 2: Build connection from parts
 conn = await asyncpg.connect(
-    host=os.environ["DATABASE_HOST"],
-    port=os.environ["DATABASE_PORT"],
-    database=os.environ["DATABASE_NAME"],
-    user=os.environ["DATABASE_USER"],
-    password=os.environ["DATABASE_PASSWORD"],
+    host=os.environ["DB_HOST"],
+    database=os.environ["DB_NAME"],
+    user=os.environ["DB_USER"],
+    password=os.environ["DB_PASSWORD"],
+    ssl="require",
 )
 ```
 
@@ -535,45 +541,41 @@ conn = await asyncpg.connect(
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `COSMOS_CONNECTION_STRING` | string | Full Cosmos DB connection string | Document database access |
-| `COSMOS_ENDPOINT` | string | Cosmos DB endpoint URL | |
-| `COSMOS_KEY` | string | Primary key from Key Vault | |
-| `COSMOS_DATABASE_NAME` | string | Database name (same as project name) | |
+| `COSMOS_ENDPOINT` | string | Cosmos DB endpoint URL | Document database access |
+| `COSMOS_DATABASE` | string | Database name (project name, `-` → `_`) | |
+| `COSMOS_KEY` | string | Primary key (see secrets note below) | |
+
+There is no `COSMOS_CONNECTION_STRING`. On **internal-service-aca** only `COSMOS_ENDPOINT` and
+`COSMOS_DATABASE` are injected — there is **no `COSMOS_KEY`**; access is via the container
+identity's Cosmos DB Data Contributor RBAC role (`DefaultAzureCredential`).
 
 **Example usage (Python with azure-cosmos):**
 ```python
 import os
 from azure.cosmos import CosmosClient
 
-# Option 1: Connection string
-client = CosmosClient.from_connection_string(os.environ["COSMOS_CONNECTION_STRING"])
-
-# Option 2: Endpoint + key
 client = CosmosClient(
     url=os.environ["COSMOS_ENDPOINT"],
-    credential=os.environ["COSMOS_KEY"]
+    credential=os.environ["COSMOS_KEY"],
 )
-database = client.get_database_client(os.environ["COSMOS_DATABASE_NAME"])
+database = client.get_database_client(os.environ["COSMOS_DATABASE"])
 ```
 
 ### Injected When `redis.enabled: true`
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `REDIS_CONNECTION_STRING` | string | Full Redis connection string | Cache access |
-| `REDIS_HOST` | string | Redis server FQDN | |
-| `REDIS_PORT` | string | Port (default: `6380` for SSL) | |
-| `REDIS_PASSWORD` | string | Access key from Key Vault | |
+| `REDIS_HOST` | string | Redis server FQDN | Cache access |
+| `REDIS_PORT` | string | Port (`6380`, SSL) | |
+| `REDIS_PASSWORD` | string | Access key (see secrets note below) | |
+
+There is no `REDIS_CONNECTION_STRING`.
 
 **Example usage (Python with redis):**
 ```python
 import os
 import redis
 
-# Option 1: Connection string
-r = redis.from_url(os.environ["REDIS_CONNECTION_STRING"])
-
-# Option 2: Build connection
 r = redis.Redis(
     host=os.environ["REDIS_HOST"],
     port=int(os.environ["REDIS_PORT"]),
@@ -586,24 +588,24 @@ r = redis.Redis(
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `STORAGE_ACCOUNT_NAME` | string | Storage account name | Blob/file/table/queue access |
-| `STORAGE_CONNECTION_STRING` | string | Full connection string | SDK initialization |
-| `STORAGE_ACCOUNT_KEY` | string | Primary key from Key Vault | |
+| `STORAGE_ACCOUNT` | string | ADLS Gen2 storage account name | Blob/file access |
+| `STORAGE_FILESYSTEM` | string | Filesystem/container name (project name, `-` → `_`) | |
+| `STORAGE_ENDPOINT` | string | ADLS dfs endpoint (`https://{acct}.dfs.core.windows.net/`) | |
 
-**Example usage (Python with azure-storage-blob):**
+There is **no** storage key or connection string. Access is via the container's managed
+identity (Storage Blob Data Contributor RBAC) using `DefaultAzureCredential`. *(web-app-awa
+injects these env vars but does not grant the RBAC role — see the awa notes; you must assign
+it manually there.)*
+
+**Example usage (Python with azure-storage-blob + managed identity):**
 ```python
 import os
+from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
-# Option 1: Connection string
-blob_service = BlobServiceClient.from_connection_string(
-    os.environ["STORAGE_CONNECTION_STRING"]
-)
-
-# Option 2: Account name + key
 blob_service = BlobServiceClient(
-    account_url=f"https://{os.environ['STORAGE_ACCOUNT_NAME']}.blob.core.windows.net",
-    credential=os.environ["STORAGE_ACCOUNT_KEY"]
+    account_url=f"https://{os.environ['STORAGE_ACCOUNT']}.blob.core.windows.net",
+    credential=DefaultAzureCredential(),
 )
 ```
 
@@ -626,8 +628,15 @@ services:
 
 **Rules:**
 - Custom env vars are merged with auto-injected vars
-- Auto-injected vars take precedence (you cannot override `DATABASE_URL`, `AZURE_CLIENT_ID`, etc.)
-- Use custom env vars for feature flags, API keys, non-resource config
+- Auto-injected vars take precedence (you cannot override `DB_PASSWORD`, `AZURE_CLIENT_ID`, etc.)
+- Use custom env vars for feature flags and non-resource config
+- **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a
+  secret in a plain `env:` value; rely on the auto-injected resource credentials instead.
+- **How the auto-injected credentials are stored differs by stack:** on `web-app-aca` and
+  `internal-service-aca`, `DB_PASSWORD`/`COSMOS_KEY`/`REDIS_PASSWORD` are Container Apps
+  `secretRef`s (platform-backed, not plaintext). On **`web-app-awa` these same credentials are
+  injected as plaintext app-setting values** (visible in the Azure portal). Storage uses no key
+  on any stack (managed-identity/RBAC).
 
 ---
 
