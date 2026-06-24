@@ -71,6 +71,7 @@ Available deployment stacks:
 - **Networking** — automatic DNS, TLS certificates, ingress rules, container-to-container communication
 - **Authentication** — EasyAuth on web frontends (RedirectToLoginPage, always enforced); JWT middleware on API backends (token validation). Two Entra registrations: `ao-{project}-client` (login/MSAL.js client) and `ao-{project}-api` (audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability** — Application Insights (workspace-based)
+- **Compute & scaling** — each container runs at 0.25 vCPU / 0.5 GiB with scale-to-zero (`minReplicas: 0, maxReplicas: 1`); the first request after the app idles incurs a cold start
 
 ### Best for
 
@@ -152,6 +153,26 @@ resources:
   filesystem access over Azure Files (SMB). If using SQLite on a volume, see the
   `services.<name>.volume` section in the manifest schema for VFS and journal mode requirements.
 
+### Same-origin API proxy (nginx)
+
+The common `web-app-aca` topology serves the SPA from the web container and reverse-proxies `/api`
+to the API container (kept out of EasyAuth via `auth_exclude: ["/api"]`). nginx does **not** forward
+the `Authorization` header to a `proxy_pass` upstream by default — set it explicitly, or the API's
+JWT middleware sees no Bearer token and returns 401:
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8000/;
+    proxy_set_header Authorization $http_authorization;
+}
+```
+
+The web container is injected `API_BASE_URL` (`https://{api-fqdn}`) and `API_SERVICE_NAME`
+(`{project}-api`) to reach the API container — call the API via `API_BASE_URL` (see the injected-vars
+table in `manifest-schema.md`). EasyAuth itself **does** forward a valid `Authorization: Bearer` token
+through to the backend, so the API container can validate it in-app; the caveat above is only about the
+nginx reverse-proxy hop, which drops the header unless you set it explicitly.
+
 ---
 
 ## Stack: `web-app-awa`
@@ -168,6 +189,8 @@ resources:
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
 - **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
+
+> **Resource access (awa-specific):** unlike the Container Apps stacks, the backend's managed identity gets **no RBAC** on Cosmos/Storage, and resource credentials are injected as **plaintext app settings** (not Key Vault secret refs). Cosmos works via the injected `COSMOS_KEY`; **Storage has neither a key nor an RBAC grant**, so keyless (`DefaultAzureCredential`) access requires a manual role assignment. (Injected variable names: see `manifest-schema.md`.)
 
 ### Best for
 
@@ -271,7 +294,7 @@ app.add_middleware(
 
 - **Frontend:** Azure Static Web App with GitHub integration
 - **Optional serverless API:** Azure Functions (if `api_location` specified)
-- **Authentication:** EasyAuth with Entra ID (login always enforced via `staticwebapp.config.json` route rules). One Entra registration: `ao-{project}-client` ONLY (no `-api`, no `access_as_user`) — it calls external APIs (e.g. Microsoft Graph) with their own scopes
+- **Authentication:** EasyAuth with Entra ID (login always enforced via `staticwebapp.config.json` route rules) — **requires the SWA Standard plan; on the Free tier the AAD auth config is silently ignored.** One Entra registration: `ao-{project}-client` ONLY (no `-api`, no `access_as_user`) — it calls external APIs (e.g. Microsoft Graph) with their own scopes
 - **No databases:** This stack does not support PostgreSQL, Cosmos, Redis, or Storage
 
 ### Best for
@@ -384,10 +407,41 @@ The `clientIdSettingName` tells SWA to read the app setting named `AZURE_CLIENT_
 the Bicep template) and use it as the OAuth client ID for the built-in AAD login flow. The
 `openIdIssuer` pins login to a specific tenant — without it, any Microsoft account can log in.
 
+**App registration requirements (separate from `staticwebapp.config.json`):** SWA's login flow
+also needs the project's Entra **client** app registration to have two things, or login fails at
+runtime even when `staticwebapp.config.json` is correct:
+- **'ID tokens' enabled** (Authentication > Implicit grant and hybrid flows) — SWA's built-in AAD
+  provider uses a hybrid OIDC flow that requires an `id_token` from `/authorize`.
+- the **`https://{swa-hostname}/.auth/login/aad/callback`** redirect URI (Web).
+
+For **platform-managed** registrations the provisioner sets both automatically. For a **BYO**
+client (`auth.client_app_id`, **including an app reg reused from a prior deploy**) the provisioner
+is read-only — it prints both at the end of `up` and you must add them in the portal yourself. A
+SWA that authenticates once then breaks, or 401s after a fresh deploy, is almost always missing
+one of these two.
+
 > **User configs are often better than platform-generated ones.** The platform generates a minimal
 > `staticwebapp.config.json` with no security headers, generic exclude patterns, and no
 > `post_login_redirect_uri`. When a user has invested in their config (custom CSP, refined routes,
 > build-tool-specific excludes), preserve their customizations and only merge in the `auth` section.
+
+### Calling Microsoft Graph or other external APIs
+
+The `static-web-app` stack has a login client (`ao-{project}-client`) but no first-party `-api`.
+A SWA SPA reaches external APIs (Microsoft Graph, SharePoint) by acquiring **its own** delegated
+tokens with MSAL.js:
+
+- **One token per resource.** Graph and SharePoint are distinct resources with distinct tokens —
+  acquire Graph scopes (`https://graph.microsoft.com/<scope>`) and SharePoint REST
+  (`https://<tenant>.sharepoint.com/.default`) separately. Request only the scopes each call needs.
+- **Delegated permissions need admin consent.** Graph scopes like `Files.Read.All`,
+  `Sites.Read.All`, or `Chat.Read` require tenant-admin consent on the `-client` registration.
+  Without it, the first call that needs them fails with a consent error — a human approval step,
+  not something `amplifier-online up` can grant.
+- **CSP must allow the call.** If the SPA sets a Content-Security-Policy, `connect-src` must list
+  every external origin it calls — `https://graph.microsoft.com`, `https://*.sharepoint.com`, and
+  `https://login.microsoftonline.com` (MSAL token requests). A missing origin is silently blocked
+  by the browser and surfaces only after deploy.
 
 ### Optional Serverless API Functions
 
@@ -434,6 +488,7 @@ frontend:
 - **Networking** -- internal DNS only (`<project>-api.internal.<env-default-domain>`), reachable only within the Container Apps Environment; no public FQDN
 - **Authentication** -- no EasyAuth, no login client; one Entra registration `ao-{project}-api` (audience only, internal posture: no `access_as_user`, no APIM). Service-to-service auth via JWT middleware or managed identity tokens
 - **Observability** -- Application Insights (workspace-based)
+- **Compute & scaling** -- the container runs at 0.25 vCPU / 0.5 GiB with scale-to-zero (`minReplicas: 0, maxReplicas: 1`); the first request after idle incurs a cold start
 
 ### Best for
 
@@ -509,6 +564,69 @@ resources:
 - Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode).
 - Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage
+
+### Service-to-service authentication
+
+The internal `-api` registration is an audience only — there is no EasyAuth and no login client.
+Callers authenticate with a **managed-identity token**, and the service validates it in app
+middleware. Two layers of defense:
+
+1. **Network isolation** — `external: false` keeps the container off the public internet. This is
+   **not sufficient alone**: every app in the same Container Apps Environment can reach every other
+   internal app over the CAE network. Isolation stops outsiders, not neighbors.
+2. **Identity verification** — the JWT `azp` (authorized-party) check is the required second gate.
+   Even a neighbor that can reach the internal FQDN needs a token from an allowed caller.
+
+**Caller side** — the calling app's managed identity gets a token from the Instance Metadata
+Service (no secrets, automatic inside a Container App):
+
+```python
+from azure.identity import ManagedIdentityCredential
+
+credential = ManagedIdentityCredential()
+token = credential.get_token("api://<callee-app-id>/.default")
+headers = {"Authorization": f"Bearer {token.token}"}
+```
+
+**Callee side** — validate signature (JWKS), issuer, and audience (`api://<callee-app-id>`), then
+check `azp` against a whitelist of allowed caller client IDs. A managed-identity
+(client-credentials) token has a distinct shape — use it to tell a service caller from a user:
+
+| Claim | Service (MI) token | User token |
+|-------|--------------------|------------|
+| `azp` | caller's MI client ID | the SPA/CLI client ID |
+| `scp` | **absent** | `access_as_user` |
+| `name` / `preferred_username` | **absent** | present |
+| `roles` | absent unless assigned | app-role assignments |
+
+Debugging a 401/403 between services? Confirm the audience is `api://<callee-app-id>` and the
+caller's `azp` is whitelisted; a missing `scp` confirms it is an MI (not user) token.
+
+**Authorizing callers — two options:**
+
+- **Option A — `appRoleAssignmentRequired: false` (default) + `azp` whitelist.** Entra issues a
+  token to any authenticated MI; your code accepts only whitelisted callers. Add a caller by
+  putting its client ID in config and redeploying. Simplest starting point.
+- **Option B — `appRoleAssignmentRequired: true` + app-role assignments.** Entra refuses to issue
+  a token unless the calling MI has an explicit assignment on your service principal —
+  unauthorized callers are blocked before your code runs. Stronger, but you manage assignments.
+
+Granting app-role assignments on your **own** app registration does **not** require Privileged Role
+Admin (that constraint applies only to Microsoft first-party apps you don't own), so Option B is
+fully self-serviceable.
+
+**Why no `access_as_user` / APIM:** the tenant's APIM compliance requirement triggers specifically
+on `oauth2PermissionScopes` being defined — not on `identifierUris`. An audience-only registration
+avoids it. (Corollary: a *user-facing* API can also skip APIM by authorizing with app **roles**
+instead of an `access_as_user` scope.)
+
+**Going public later** is additive: add `oauth2PermissionScopes` → deploy Consumption-tier APIM →
+pre-authorize Azure CLI / your SPA → optionally set `appRoleAssignmentRequired: true` → set
+`external: true`. Your middleware then needs a second code path for user tokens (detected by the
+presence of `scp`) alongside the existing MI path.
+
+For the roles-vs-groups authorization model and the 200-group overage caveat, see
+`authorization-guide.md`.
 
 ---
 

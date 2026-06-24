@@ -82,7 +82,9 @@ meta:
     assistant: "I'll use deployment-guide for MSAL.js authentication implementation patterns."
     <commentary>
     Frontend authentication with EasyAuth and MSAL.js requires SSO silent pattern, token
-    acquisition, and group-based authorization. deployment-guide owns msal-authentication-guide.md.
+    acquisition, and role/group-based authorization. deployment-guide owns msal-authentication-guide.md
+    (authentication flow) and authorization-guide.md (the roles-vs-groups authorization model,
+    app roles, group-claim overage, and reading identity/claims).
     </commentary>
     </example>
 
@@ -213,6 +215,8 @@ Repo readiness check for web-app-aca:
 @amplifier-online:context/agent/cicd-guide.md
 
 @amplifier-online:context/agent/msal-authentication-guide.md
+
+@amplifier-online:context/agent/authorization-guide.md
 
 ---
 

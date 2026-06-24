@@ -5,13 +5,17 @@ via Amplifier Online. Web frontends always have EasyAuth enforced (RedirectToLog
 API backends validate tokens via JWT middleware. Frontend applications use MSAL.js to acquire
 Bearer tokens for API calls.
 
-**Two registrations, split by OAuth role.** A project no longer has one `ao-{project}` app. The
+**Two registrations, split by OAuth role.** A project has two registrations, split by OAuth role, rather than a single `ao-{project}` app. The
 platform creates registrations per role: `ao-{project}-client` (the LOGIN client — public PKCE,
 holds redirect URIs, the app the SPA/EasyAuth sign in AS; created when the project has a frontend)
 and `ao-{project}-api` (the API AUDIENCE the backend validates — `api://{apiClientId}`; created when
 the project hosts a non-`web` backend service). The `-api` exposes the `access_as_user` scope and is
 APIM-fronted only when user-facing (`has a frontend` or `auth.expose: true`); an internal-only API
 exposes no scope and no APIM. The old suffix-less `ao-{project}` / `ao-{project}-app` names are gone.
+
+> This guide covers the MSAL.js **token-acquisition** flow. **Authorization** — roles vs groups,
+> the 200-group overage, mail-enabled-group failures, and OID-first identity binding — lives in
+> `authorization-guide.md`.
 
 ---
 
@@ -426,10 +430,29 @@ export async function clearTokenCache() {
 
 **When to use:**
 - After changing user group memberships
+- After changing the exposed scopes or API permissions (cached tokens are keyed by scope set, so
+  scope/permission changes go stale exactly like group changes)
 - After changing token claims configuration
 - When troubleshooting stale permissions
 
+The same staleness affects CLI tokens; for the `az`-side cache-clear recipe see `authorization-guide.md`.
+
 **Alternative:** Provide a "Refresh Permissions" button in your UI that calls `clearTokenCache()`.
+
+---
+
+## Local Development
+
+**`localhost` redirect URIs are blocked tenant-wide.** You cannot complete an interactive Entra
+login against the corporate tenant from `http://localhost`, so a normal MSAL.js sign-in won't work
+on a dev machine. Two options:
+
+- **Dev-mode bypass (recommended for local work):** run the backend with `ENVIRONMENT=development`.
+  `jwt_middleware.py` then injects a synthetic dev identity and skips token validation, so you can
+  exercise the app locally without a real login. (Configure the fake identity via `DEV_USER_NAME` /
+  `DEV_USER_ID`.)
+- **Separate dev tenant:** to test the real login flow, register the app in a separate dev tenant
+  whose policy permits `localhost` redirect URIs.
 
 ---
 
@@ -663,6 +686,7 @@ export default App;
 
 ## Related Documentation
 
-- [Stack Users Guide](../stack-users-guide.md) - Complete deployment guide
+- [Stacks Reference](stacks-reference.md) - All stacks, selection criteria, and per-stack auth
+- [Authorization Guide](authorization-guide.md) - Roles vs groups, overage, identity binding
 - [Troubleshooting Playbook](troubleshooting-playbook.md) - Common deployment issues
 - [Manifest Schema](manifest-schema.md) - Project configuration reference

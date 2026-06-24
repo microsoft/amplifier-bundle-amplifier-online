@@ -75,6 +75,7 @@ context/
     troubleshooting-playbook.md
     cicd-guide.md
     msal-authentication-guide.md
+    authorization-guide.md
 ```
 
 ## Supported Stacks
