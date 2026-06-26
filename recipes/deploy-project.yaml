@@ -1,495 +1,654 @@
+# =============================================================================
+# CHANGELOG
+# =============================================================================
+#
+# v1.0.0 (2026-06-26):
+#   - CRITICAL FIX: Rewrote recipe to conform to the staged recipe schema.
+#     * ROOT CAUSE: The original draft used an invalid structure that produced
+#       12 validation errors across 5 categories:
+#         1. Missing top-level `version` field.
+#         2. Stages defined `agent:`/`instruction:` directly instead of wrapping
+#            work in a `steps:` list of step objects.
+#         3. Field `instruction:` used instead of the schema field `prompt:`.
+#         4. Approval gates used `approval_required:`/`approval_message:` instead
+#            of the stage-level `approval:` block (required/prompt).
+#         5. `update_context` referenced non-existent Jinja filters
+#            (extract_recommended_stack, check_environment_ready,
+#            check_repo_readiness, extract_deployment_url, check_deployment_health).
+#     * FIX:
+#         - Added `version: "1.0.0"`.
+#         - Each stage now has a `steps:` list with `id`, `type: agent`, `agent`,
+#           `prompt`, and `output`.
+#         - Renamed every `instruction:` to `prompt:`.
+#         - Converted approval gates to stage-level `approval:` blocks.
+#         - Removed all custom filters. Values are threaded via step `output`
+#           variables; the deployment-guide agent extracts specifics from prior
+#           output text per its prompt instructions.
+#         - The two looping stages (environment-setup, prepare) now use valid
+#           step-level `while_condition` + `break_when` + `update_context`, with
+#           a simple boolean flag fed by a trailing JSON status the agent emits
+#           (parse_json: true) and a `max_while_iterations` safety limit.
+#         - Replaced unsupported Jinja `{% if %}` control flow inside prompts with
+#           plain-language conditional instructions for the agent.
+#     * RESULT: Recipe validates cleanly while preserving all original prompt
+#       content and the 10-stage guided deployment flow with approval gates.
+#
+# =============================================================================
+
 name: deploy-project
-description: |
+description: >
   Guided end-to-end deployment of a project to Amplifier Online. Analyzes your project,
   recommends the right stack, verifies prerequisites, guides manifest creation, container
   builds, deployment, and optional CI/CD setup. Multi-stage with approval gates at critical
   decision points.
+version: "1.0.0"
+author: "Amplifier Online"
+tags: ["amplifier-online", "deployment", "azure", "staged", "approval-gates"]
+
+# Requirements:
+#   - amplifier-online bundle (provides the deployment-guide agent)
+#
+# Usage:
+#   amplifier tool invoke recipes operation=execute \
+#     recipe_path=@amplifier-online:recipes/deploy-project.yaml \
+#     context='{"project_dir": "."}'
 
 context:
-  project_dir:
-    type: string
-    description: Path to the project directory to deploy
-    default: "."
+  project_dir: "."          # Path to the project directory to deploy
+  environment_ready: "false" # Loop flag for the environment-setup stage
+  repo_ready: "false"        # Loop flag for the prepare stage
 
 stages:
-  - name: analyze
-    description: Analyze project structure and recommend deployment stack
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Project Analysis
-      
-      You are in the **analyze** stage of the guided deployment recipe. Your task:
-      
-      1. Scan the project directory at {{ project_dir }} using glob and grep
-      2. Follow the detection patterns in @amplifier-online:context/agent/project-analysis.md
-      3. Detect: backend framework, frontend framework, containerization status
-      4. Map detected patterns to stack recommendations (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
-      5. Present findings in this format:
-      
-      ```
-      PROJECT PROFILE
-      
-      Backend: [FastAPI/Django/Flask/Express/None]
-        - Dockerfile: [✅ path | ❌ missing]
-        - Framework evidence: [files found]
-      
-      Frontend: [React/Vue/Next.js/Static HTML/None]
-        - Dockerfile: [✅ path | ❌ missing] (for container-based)
-        - GitHub repo: [detected from git remote | ❌ not in GitHub]
-        - Framework evidence: [files found]
-      
-      Resources Detected:
-        - Database needs: [PostgreSQL/MongoDB/None - based on requirements/package.json]
-        - Cache needs: [Redis detected | None]
-        - Storage needs: [File uploads/object storage | None]
-      
-      STACK RECOMMENDATION: [stack-name]
-      
-      Reasoning:
-      - [Why this stack matches the detected architecture]
-      - [Criteria from stacks-reference.md that align]
-      
-      Alternative Options:
-      - [Other stacks that could work, with trade-offs]
-      ```
-      
-      Store the recommended stack in context as `recommended_stack` for the next stage.
-    
-    update_context:
-      recommended_stack: "{{ _last_response | extract_recommended_stack }}"
-      project_profile: "{{ _last_response }}"
+  # ---------------------------------------------------------------------------
+  # Stage 1: Analyze project structure and recommend a deployment stack
+  # ---------------------------------------------------------------------------
+  - name: "analyze"
+    steps:
+      - id: "analyze-project"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Project Analysis
 
-  - name: select-stack
-    description: User confirms stack selection or chooses alternative
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Stack Selection (Approval Gate)
-      
-      Present the recommendation from the analyze stage:
-      
-      {{ project_profile }}
-      
-      Ask the user:
-      "The recommended stack is **{{ recommended_stack }}** based on your project structure.
-      
-      Options:
-      1. Proceed with {{ recommended_stack }}
-      2. Choose a different stack (I'll explain all three)
-      3. Cancel (not ready to deploy yet)
-      
-      What would you like to do?"
-      
-      If user wants to see all stacks, load @amplifier-online:context/agent/stacks-reference.md
-      and present the comparison table.
-      
-      Store the final selected stack as `selected_stack`.
-    
-    update_context:
-      selected_stack: "{{ _approval_message | default(recommended_stack) }}"
-    
-    approval_required: true
-    approval_message: "Confirm stack selection: {{ recommended_stack }}"
+          You are in the **analyze** stage of the guided deployment recipe. Your task:
 
-  - name: environment-setup
-    description: Verify CLI, config, and Azure authentication
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Environment Setup
-      
-      The user has selected: **{{ selected_stack }}**
-      
-      Run these checks in sequence. For each ❌, provide remediation guidance.
-      
-      CHECK 1: Amplifier Online CLI installed
-        Run: which amplifier-online
-        ❌ If not found → "Install with: uv tool install amplifier-online"
-      
-      CHECK 2: Global config exists
-        Check: ~/.amplifier-online/config.yaml
-        ❌ If missing → "Run: amplifier-online config" and guide through prompts
-        ✅ If exists → Read and verify acr_name, resource_group, environment
-      
-      CHECK 3: Azure authentication
-        The CLI supports multiple credential types (InteractiveBrowserCredential, AzureCliCredential, etc.)
-        Try: amplifier-online stack list (this will test auth)
-        ❌ If auth fails → Guide: "The CLI will prompt for browser login if needed. Run: amplifier-online stack list"
-        ✅ If succeeds → "Azure authentication working"
-      
-      Loop this stage until all checks pass. Use while_condition to retry.
-      
-      Present final checklist:
-      ```
-      ENVIRONMENT READY
-      ✅ Amplifier Online CLI installed
-      ✅ Config: ~/.amplifier-online/config.yaml
-      ✅ Azure authentication working
-      ```
-    
-    while_condition: "{{ environment_checks_failed | default(true) }}"
-    break_when: "{{ all_checks_passed }}"
-    update_context:
-      all_checks_passed: "{{ _last_response | check_environment_ready }}"
-      environment_checks_failed: "{{ not all_checks_passed }}"
+          1. Scan the project directory at {{ project_dir }} using glob and grep
+          2. Follow the detection patterns in @amplifier-online:context/agent/project-analysis.md
+          3. Detect: backend framework, frontend framework, containerization status
+          4. Map detected patterns to stack recommendations (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
+          5. Present findings in this format:
 
-  - name: initialize
-    description: Generate or validate project manifest
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Manifest Initialization (Approval Gate)
-      
-      Selected stack: **{{ selected_stack }}**
-      Project directory: {{ project_dir }}
-      
-      STEP 1: Check if amplifier-online.yaml exists
-        Run: glob("amplifier-online.yaml")
-      
-      IF MANIFEST EXISTS:
-        - Read the manifest with read_file
-        - Validate against @amplifier-online:context/agent/manifest-schema.md
-        - Check for outdated schema (e.g., uses `containers:` instead of `services:`, uses top-level `backend:` instead of `services: api:` for web-app-awa, or `frontend:` section missing `protected`/`auth` fields).
-        - Propose fixes for any schema drift
-        - Ask user: "I found an existing manifest. [Show summary]. Want to update it or keep as-is?"
-      
-      IF NO MANIFEST:
-        - Run: amplifier-online init --stack {{ selected_stack }}
-        - Read the generated manifest
-        - Explain each field to the user
-        - Highlight fields they MUST customize (name, image references, ports)
-      
-      Present the manifest with field-by-field explanation:
-      ```yaml
-      name: my-project              # ← Change this to your project name
-      stack: {{ selected_stack }}
-      
-      services:
-        api:
-          image: amplifieronlinecr.azurecr.io/my-project-api:latest  # ← Update project name
-          port: 8000                # ← Must match your app's listen port
-          protected: validate       # ← validate | login | false; or object form {mode, exclude}
-      
-      [... rest of manifest with annotations ...]
-      ```
-      
-      Ask: "Does this manifest look correct? Any fields to adjust?"
-      
-      Store: manifest_validated: true when user approves
-    
-    update_context:
-      manifest_validated: "{{ _approval_message == 'yes' or _approval_message == 'approved' or _approval_message == 'looks good' }}"
-    
-    approval_required: true
-    approval_message: "Review the manifest. Approve to proceed?"
-
-  - name: prepare
-    description: Repo readiness checklist
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Repository Preparation
-      
-      Stack: **{{ selected_stack }}**
-      
-      Run the repo readiness check from your operating principles.
-      
-      FOR web-app-aca and internal-service-aca:
-        1. Verify Dockerfiles exist for each container (glob "**/Dockerfile*")
-        2. Verify ACR image format in manifest (grep for docker.io or wrong registry)
-        3. Verify health endpoints exist (/health returning 200 OK)
-        4. Check ports in manifest match application listen ports
-      
-      FOR web-app-awa:
-        Backend: Same Docker checks as web-app-aca/internal-service-aca
-        Frontend: 
-          - Verify GitHub repo URL in manifest is accessible
-          - Check build output directory (output_location) matches framework default
-          - Verify build command is correct (npm run build, etc.)
-      
-      FOR static-web-app:
-        - Verify GitHub repo URL
-        - Check build config (output_location, build_command)
-        - No backend checks needed
-      
-      Present checklist:
-      ```
-      REPO READINESS for {{ selected_stack }}
-      
-      ✅ [checks that passed]
-      ❌ [checks that failed]
-      
-      FOR EACH ❌:
-      - What's wrong
-      - How to fix it
-      - Exact commands or code changes needed
-      ```
-      
-      If any ❌ exist, guide remediation and loop this stage until all pass.
-      
-      Store: repo_ready: true when all checks pass
-    
-    while_condition: "{{ not repo_ready }}"
-    break_when: "{{ repo_ready }}"
-    update_context:
-      repo_ready: "{{ _last_response | check_repo_readiness }}"
-
-  - name: build-push
-    description: Build and push container images to ACR
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Build and Push (Container stacks only)
-      
-      Stack: **{{ selected_stack }}**
-      
-      {% if selected_stack == 'static-web-app' %}
-      SKIP: static-web-app stack doesn't use container images. GitHub Actions handles builds.
-      {% else %}
-      
-      Read the manifest to extract image names and Dockerfile paths.
-      
-      For each service defined in the `services:` map:
-        1. Generate the build command:
-           docker build -t [image-from-manifest] [dockerfile-dir]
-        
-        2. Generate ACR login and push:
-           az acr login --name [acr-name-from-config]
-           docker push [image-from-manifest]
-      
-      Present the full sequence:
-      ```bash
-      # Backend
-      docker build -t amplifieronlinecr.azurecr.io/my-project-api:latest ./api
-      az acr login --name amplifieronlinecr
-      docker push amplifieronlinecr.azurecr.io/my-project-api:latest
-      
-      # Frontend (if container type)
-      docker build -t amplifieronlinecr.azurecr.io/my-project-web:latest ./web
-      docker push amplifieronlinecr.azurecr.io/my-project-web:latest
-      ```
-      
-      Ask user: "Run these commands in your terminal, then confirm when both images are pushed."
-      {% endif %}
-      
-      Store: images_pushed: true when user confirms (or stack is static-web-app)
-    
-    update_context:
-      images_pushed: "{{ selected_stack == 'static-web-app' or (_approval_message == 'done' or _approval_message == 'pushed') }}"
-    
-    approval_required: true
-    approval_message: "Confirm images are pushed to ACR (or press enter to skip for static-web-app)"
-
-  - name: deploy
-    description: Deploy to Amplifier Online with preview
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Deployment (Approval Gate)
-      
-      Stack: **{{ selected_stack }}**
-      
-      STEP 1: Dry-run preview
-        Run: amplifier-online up --dry-run
-        
-        Present the output to the user:
-        ```
-        DRY-RUN PREVIEW
-        
-        [paste dry-run output showing resources to be created]
-        ```
-      
-      STEP 2: Ask for approval
-        "This will create the above resources in Azure. Proceed with actual deployment?"
-      
-      STEP 3: If approved, run deployment
-        Run: amplifier-online up
-        
-        Show real-time output as deployment progresses.
-      
-      STEP 4: Extract deployment info
-        - Project URL (from deployment output)
-        - Container App names (if web-app-aca or internal-service-aca)
-        - Static Web App name (if static-web-app or web-app-awa frontend)
-      
-      Store: deployed: true, deployment_url: [extracted-url]
-    
-    update_context:
-      deployed: "{{ _approval_message == 'yes' or _approval_message == 'deploy' }}"
-      deployment_url: "{{ _last_response | extract_deployment_url }}"
-    
-    approval_required: true
-    approval_message: "Approve deployment after reviewing dry-run preview"
-
-  - name: verify
-    description: Health check and troubleshooting
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Verification
-      
-      Deployment URL: {{ deployment_url }}
-      
-      STEP 1: Check deployment status
-        Run: amplifier-online status
-        
-        Parse output:
-        - Are all containers/apps in "Running" state?
-        - Any error messages?
-      
-      STEP 2: Health check (for container stacks)
-        {% if selected_stack != 'static-web-app' %}
-        Run: curl {{ deployment_url }}/health
-        
-        ✅ If 200 OK → "Health check passed"
-        ❌ If failed → Engage troubleshooting mode:
-          1. amplifier-online logs --container [service-name]
-          2. Map error to failure mode in troubleshooting-playbook.md
-          3. Guide remediation
-        {% else %}
-        Run: curl {{ deployment_url }}
-        
-        ✅ If loads → "Static site is live"
-        ❌ If failed → Check Static Web App deployment logs in Azure Portal
-        {% endif %}
-      
-      STEP 3: Present results
-        ```
-        DEPLOYMENT VERIFICATION
-        
-        ✅ Status: All containers/apps running
-        ✅ Health: {{ deployment_url }}/health → 200 OK
-        ✅ Your app is live at: {{ deployment_url }}
-        
-        Next: Set up CI/CD for automatic deployments? (next stage)
-        ```
-      
-      Store: deployment_healthy: true if all checks pass
-    
-    update_context:
-      deployment_healthy: "{{ _last_response | check_deployment_health }}"
-
-  - name: cicd-setup
-    description: Optional GitHub Actions CI/CD setup
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: CI/CD Setup (Optional)
-      
-      Stack: **{{ selected_stack }}**
-      
-      Ask user: "Want to set up GitHub Actions for automatic deployments on push? (yes/skip)"
-      
-      IF YES:
-        STEP 1: Generate workflows
-          Run: amplifier-online cicd create --dry-run
-          
-          Show preview:
           ```
-          WORKFLOWS TO BE CREATED
-          
-          [list generated workflow files]
+          PROJECT PROFILE
+
+          Backend: [FastAPI/Django/Flask/Express/None]
+            - Dockerfile: [present path | missing]
+            - Framework evidence: [files found]
+
+          Frontend: [React/Vue/Next.js/Static HTML/None]
+            - Dockerfile: [present path | missing] (for container-based)
+            - GitHub repo: [detected from git remote | not in GitHub]
+            - Framework evidence: [files found]
+
+          Resources Detected:
+            - Database needs: [PostgreSQL/MongoDB/None - based on requirements/package.json]
+            - Cache needs: [Redis detected | None]
+            - Storage needs: [File uploads/object storage | None]
+
+          STACK RECOMMENDATION: [stack-name]
+
+          Reasoning:
+          - [Why this stack matches the detected architecture]
+          - [Criteria from stacks-reference.md that align]
+
+          Alternative Options:
+          - [Other stacks that could work, with trade-offs]
           ```
-        
-        STEP 2: Create workflows if user approves
-          Run: amplifier-online cicd create
-        
-        STEP 3: Guide GitHub secrets setup
-          Load @amplifier-online:context/agent/cicd-guide.md
-          
-          Present required secrets based on stack:
-          
-          {% if selected_stack == 'web-app-aca' or selected_stack == 'internal-service-aca' or selected_stack == 'web-app-awa' %}
-          For container workflows:
-            - AZURE_CLIENT_ID
-            - AZURE_TENANT_ID
-            - AZURE_SUBSCRIPTION_ID
-          
-          How to get these values:
-          [guide from cicd-guide.md]
-          {% endif %}
-          
-          {% if selected_stack == 'web-app-awa' or selected_stack == 'static-web-app' %}
-          For Static Web App:
-            - AZURE_STATIC_WEB_APPS_API_TOKEN
-          
-          How to get: Azure Portal → Static Web App → Manage deployment token
-          {% endif %}
-        
-        STEP 4: Commit workflows
+
+          Make the "STACK RECOMMENDATION:" line explicit and unambiguous so the next
+          stage can read the recommended stack directly from your output.
+        output: "project_profile"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 2: User confirms stack selection or chooses an alternative
+  # ---------------------------------------------------------------------------
+  - name: "select-stack"
+    approval:
+      required: true
+      prompt: |
+        Stack analysis complete. Review the project profile and recommendation:
+
+        {{ project_profile }}
+
+        Approve to lock in the selected stack and continue to environment setup.
+        Deny to stop and reconsider the stack choice.
+    steps:
+      - id: "select-stack"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Stack Selection
+
+          Present the recommendation from the analyze stage:
+
+          {{ project_profile }}
+
+          Ask the user:
+          "The recommended stack is the one shown on the STACK RECOMMENDATION line above,
+          based on your project structure.
+
+          Options:
+          1. Proceed with the recommended stack
+          2. Choose a different stack (I'll explain all of them)
+          3. Cancel (not ready to deploy yet)
+
+          What would you like to do?"
+
+          If the user wants to see all stacks, load @amplifier-online:context/agent/stacks-reference.md
+          and present the comparison table.
+
+          At the end of your response, clearly state the FINAL selected stack on its own
+          line in the form:
+          SELECTED STACK: <stack-name>
+          (one of: web-app-aca, internal-service-aca, web-app-awa, static-web-app)
+        output: "stack_selection"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: Verify CLI, config, and Azure authentication (looping)
+  # ---------------------------------------------------------------------------
+  - name: "environment-setup"
+    steps:
+      - id: "check-environment"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Environment Setup
+
+          The user selected a stack in the previous stage. Refer to it here:
+          {{ stack_selection }}
+
+          Run these checks in sequence. For each failure, provide remediation guidance.
+
+          CHECK 1: Amplifier Online CLI installed
+            Run: which amplifier-online
+            If not found -> "Install with: uv tool install amplifier-online"
+
+          CHECK 2: Global config exists
+            Check: ~/.amplifier-online/config.yaml
+            If missing -> "Run: amplifier-online config" and guide through prompts
+            If exists -> Read and verify acr_name, resource_group, environment
+
+          CHECK 3: Azure authentication
+            The CLI supports multiple credential types (InteractiveBrowserCredential, AzureCliCredential, etc.)
+            Try: amplifier-online stack list (this will test auth)
+            If auth fails -> Guide: "The CLI will prompt for browser login if needed. Run: amplifier-online stack list"
+            If succeeds -> "Azure authentication working"
+
+          Work with the user to resolve any failing check before reporting success.
+
+          Present the final checklist:
+          ```
+          ENVIRONMENT READY
+          [pass] Amplifier Online CLI installed
+          [pass] Config: ~/.amplifier-online/config.yaml
+          [pass] Azure authentication working
+          ```
+
+          FINALLY, output a single JSON object on its own line as the LAST line of your
+          response indicating whether every check passed:
+          {"all_checks_passed": true}   (if all three checks pass)
+          {"all_checks_passed": false}  (if any check still fails)
+        output: "environment_status"
+        parse_json: true
+        while_condition: "{{ environment_ready }} != 'true'"
+        break_when: "{{ environment_ready }} == 'true'"
+        max_while_iterations: 10
+        update_context:
+          environment_ready: "{{ environment_status.all_checks_passed }}"
+        timeout: 900
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Generate or validate the project manifest
+  # ---------------------------------------------------------------------------
+  - name: "initialize"
+    approval:
+      required: true
+      prompt: |
+        Manifest review complete:
+
+        {{ manifest_status }}
+
+        Approve if the manifest looks correct to proceed to repository preparation.
+        Deny to adjust manifest fields first.
+    steps:
+      - id: "initialize-manifest"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Manifest Initialization
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          Project directory: {{ project_dir }}
+
+          STEP 1: Check if amplifier-online.yaml exists
+            Run: glob("amplifier-online.yaml")
+
+          IF MANIFEST EXISTS:
+            - Read the manifest with read_file
+            - Validate against @amplifier-online:context/agent/manifest-schema.md
+            - Check for outdated schema (e.g., uses `containers:` instead of `services:`, uses top-level `backend:` instead of `services: api:` for web-app-awa, or `frontend:` section missing `protected`/`auth` fields).
+            - Propose fixes for any schema drift
+            - Ask user: "I found an existing manifest. [Show summary]. Want to update it or keep as-is?"
+
+          IF NO MANIFEST:
+            - Run: amplifier-online init --stack <selected-stack>
+            - Read the generated manifest
+            - Explain each field to the user
+            - Highlight fields they MUST customize (name, image references, ports)
+
+          Present the manifest with field-by-field explanation:
+          ```yaml
+          name: my-project              # <- Change this to your project name
+          stack: <selected-stack>
+
+          services:
+            api:
+              image: amplifieronlinecr.azurecr.io/my-project-api:latest  # <- Update project name
+              port: 8000                # <- Must match your app's listen port
+              protected: validate       # <- validate | login | false; or object form {mode, exclude}
+
+          [... rest of manifest with annotations ...]
+          ```
+
+          Ask: "Does this manifest look correct? Any fields to adjust?"
+
+          Summarize the validated manifest at the end of your response so the approval
+          gate can show it to the user.
+        output: "manifest_status"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 5: Repo readiness checklist (looping)
+  # ---------------------------------------------------------------------------
+  - name: "prepare"
+    steps:
+      - id: "prepare-repo"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Repository Preparation
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          Run the repo readiness check from your operating principles.
+
+          FOR web-app-aca and internal-service-aca:
+            1. Verify Dockerfiles exist for each container (glob "**/Dockerfile*")
+            2. Verify ACR image format in manifest (grep for docker.io or wrong registry)
+            3. Verify health endpoints exist (/health returning 200 OK)
+            4. Check ports in manifest match application listen ports
+
+          FOR web-app-awa:
+            Backend: Same Docker checks as web-app-aca/internal-service-aca
+            Frontend:
+              - Verify GitHub repo URL in manifest is accessible
+              - Check build output directory (output_location) matches framework default
+              - Verify build command is correct (npm run build, etc.)
+
+          FOR static-web-app:
+            - Verify GitHub repo URL
+            - Check build config (output_location, build_command)
+            - No backend checks needed
+
+          Present checklist:
+          ```
+          REPO READINESS for <selected-stack>
+
+          [pass] [checks that passed]
+          [fail] [checks that failed]
+
+          FOR EACH [fail]:
+          - What's wrong
+          - How to fix it
+          - Exact commands or code changes needed
+          ```
+
+          If any check fails, guide remediation with the user before reporting success.
+
+          FINALLY, output a single JSON object on its own line as the LAST line of your
+          response indicating whether the repo is ready:
+          {"repo_ready": true}   (if all checks pass)
+          {"repo_ready": false}  (if any check still fails)
+        output: "repo_status"
+        parse_json: true
+        while_condition: "{{ repo_ready }} != 'true'"
+        break_when: "{{ repo_ready }} == 'true'"
+        max_while_iterations: 10
+        update_context:
+          repo_ready: "{{ repo_status.repo_ready }}"
+        timeout: 900
+
+  # ---------------------------------------------------------------------------
+  # Stage 6: Build and push container images to ACR
+  # ---------------------------------------------------------------------------
+  - name: "build-push"
+    approval:
+      required: true
+      prompt: |
+        Build and push step summary:
+
+        {{ build_status }}
+
+        Approve once container images are pushed to ACR (or if the stack is
+        static-web-app, which has no images to push) to proceed to deployment.
+        Deny if the images are not yet built and pushed.
+    steps:
+      - id: "build-and-push"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Build and Push (Container stacks only)
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          If the selected stack is static-web-app:
+            SKIP this stage. The static-web-app stack doesn't use container images;
+            GitHub Actions handles builds. Tell the user this stage is skipped and that
+            they can approve the gate to continue.
+
+          Otherwise (container stacks: web-app-aca, internal-service-aca, web-app-awa):
+
+          Read the manifest to extract image names and Dockerfile paths.
+
+          For each service defined in the `services:` map:
+            1. Generate the build command:
+               docker build -t [image-from-manifest] [dockerfile-dir]
+
+            2. Generate ACR login and push:
+               az acr login --name [acr-name-from-config]
+               docker push [image-from-manifest]
+
+          Present the full sequence:
           ```bash
-          git add .github/workflows/
-          git commit -m "Add CI/CD workflows for {{ selected_stack }}"
-          git push
-          ```
-      
-      IF SKIP:
-        "No problem. You can set up CI/CD later with: amplifier-online cicd create"
-      
-      FINAL SUMMARY:
-        ```
-        🎉 DEPLOYMENT COMPLETE
-        
-        Project: [name]
-        Stack: {{ selected_stack }}
-        URL: {{ deployment_url }}
-        CI/CD: [Configured | Skipped]
-        
-        Next steps:
-        - Visit {{ deployment_url }} to see your app
-        - Monitor with: amplifier-online status
-        - View logs with: amplifier-online logs
-        {% if cicd configured %}
-        - Push to main branch to trigger automatic deployments
-        {% endif %}
-        ```
-    
-    approval_required: true
-    approval_message: "Set up CI/CD? (yes/skip)"
+          # Backend
+          docker build -t amplifieronlinecr.azurecr.io/my-project-api:latest ./api
+          az acr login --name amplifieronlinecr
+          docker push amplifieronlinecr.azurecr.io/my-project-api:latest
 
-  - name: write-deployment-context
-    description: Write project-specific deployment context into the repo's AGENTS.md
-    agent: amplifier-online:deployment-guide
-    instruction: |
-      STAGE: Write Deployment Context (Approval Gate)
-      
-      You have just completed a full deployment of this project. The key details are:
-      - Project directory: {{ project_dir }}
-      - Selected stack: {{ selected_stack }}
-      - Deployment URL: {{ deployment_url }}
-      - Deployment healthy: {{ deployment_healthy }}
-      
-      Your task is to write project-specific deployment context into the repo's AGENTS.md
-      so that a future AI session can immediately understand how to operate this deployed
-      project without re-discovering everything from scratch.
-      
-      STEP 1: Find or create the AGENTS.md file
-        Check for an existing AGENTS.md at the project root ({{ project_dir }}/AGENTS.md).
-        If not found, check {{ project_dir }}/.amplifier/AGENTS.md.
-        If neither exists, create {{ project_dir }}/.amplifier/AGENTS.md.
-      
-      STEP 2: Read the existing file content (if any)
-        If the file already contains an "Amplifier Online" section (or similar deployment
-        section), update it in place with current information. Do not duplicate.
-      
-      STEP 3: Write the deployment context
-        Ensure the file contains the following project-specific operational information
-        that answers "how do I work with this deployed project?":
-        
-        - Stack type ({{ selected_stack }}) and what that means for this repo's architecture
-        - Live deployment URL ({{ deployment_url }})
-        - Key CLI commands specific to this project: how to deploy, check status, view logs,
-          and tear down (e.g., `amplifier-online up`, `amplifier-online status`,
-          `amplifier-online logs`, `amplifier-online destroy`)
-        - CI/CD status: whether GitHub Actions workflows were set up in the previous stage
-        - Image naming convention used in this project's ACR (extracted from the manifest)
-        
-        Keep the content concise and operational. A future AI session reading this file
-        should be able to deploy an update, check health, or debug a failure without
-        consulting external documentation.
-        
-        Do NOT include: full CLI reference documentation, stack selection guidance,
-        general troubleshooting playbooks, or explanations of what Amplifier Online is.
-        Those belong in the bundle's context docs, not in the repo.
-      
-      STEP 4: Commit the change
-        Stage the file and commit with an appropriate message, e.g.:
-        ```bash
-        git add AGENTS.md .amplifier/AGENTS.md
-        git commit -m "docs: add Amplifier Online deployment context to AGENTS.md"
-        ```
-    
-    approval_required: true
-    approval_message: "Write deployment context into the repo's AGENTS.md?"
+          # Frontend (if container type)
+          docker build -t amplifieronlinecr.azurecr.io/my-project-web:latest ./web
+          docker push amplifieronlinecr.azurecr.io/my-project-web:latest
+          ```
+
+          Ask user: "Run these commands in your terminal, then confirm when both images are pushed."
+
+          Summarize the build/push status at the end of your response.
+        output: "build_status"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 7: Deploy to Amplifier Online with a dry-run preview
+  # ---------------------------------------------------------------------------
+  - name: "deploy"
+    approval:
+      required: true
+      prompt: |
+        Deployment step summary:
+
+        {{ deployment_result }}
+
+        Approve to confirm the deployment is complete and proceed to verification.
+        Deny if the deployment did not complete successfully.
+    steps:
+      - id: "deploy-project"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Deployment
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          STEP 1: Dry-run preview
+            Run: amplifier-online up --dry-run
+
+            Present the output to the user:
+            ```
+            DRY-RUN PREVIEW
+
+            [paste dry-run output showing resources to be created]
+            ```
+
+          STEP 2: Ask for approval
+            "This will create the above resources in Azure. Proceed with actual deployment?"
+
+          STEP 3: If the user approves, run deployment
+            Run: amplifier-online up
+
+            Show real-time output as deployment progresses.
+
+          STEP 4: Extract deployment info
+            - Project URL (from deployment output)
+            - Container App names (if web-app-aca or internal-service-aca)
+            - Static Web App name (if static-web-app or web-app-awa frontend)
+
+          At the end of your response, clearly state the live deployment URL on its own
+          line in the form:
+          DEPLOYMENT URL: <url>
+        output: "deployment_result"
+        timeout: 900
+
+  # ---------------------------------------------------------------------------
+  # Stage 8: Health check and troubleshooting
+  # ---------------------------------------------------------------------------
+  - name: "verify"
+    steps:
+      - id: "verify-deployment"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Verification
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          Deployment details (extract the deployment URL from here):
+          {{ deployment_result }}
+
+          STEP 1: Check deployment status
+            Run: amplifier-online status
+
+            Parse output:
+            - Are all containers/apps in "Running" state?
+            - Any error messages?
+
+          STEP 2: Health check
+            If the selected stack is a container stack (web-app-aca, internal-service-aca, web-app-awa):
+              Run: curl <deployment-url>/health
+
+              If 200 OK -> "Health check passed"
+              If failed -> Engage troubleshooting mode:
+                1. amplifier-online logs --container [service-name]
+                2. Map error to failure mode in troubleshooting-playbook.md
+                3. Guide remediation
+            If the selected stack is static-web-app:
+              Run: curl <deployment-url>
+
+              If it loads -> "Static site is live"
+              If failed -> Check Static Web App deployment logs in Azure Portal
+
+          STEP 3: Present results
+            ```
+            DEPLOYMENT VERIFICATION
+
+            [pass] Status: All containers/apps running
+            [pass] Health: <deployment-url>/health -> 200 OK
+            [pass] Your app is live at: <deployment-url>
+
+            Next: Set up CI/CD for automatic deployments? (next stage)
+            ```
+
+          Summarize whether the deployment is healthy at the end of your response.
+        output: "verification_status"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 9: Optional GitHub Actions CI/CD setup
+  # ---------------------------------------------------------------------------
+  - name: "cicd-setup"
+    approval:
+      required: true
+      prompt: |
+        Verification summary:
+
+        {{ verification_status }}
+
+        Approve to set up GitHub Actions CI/CD now, or deny to skip CI/CD setup.
+    steps:
+      - id: "cicd-setup"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: CI/CD Setup (Optional)
+
+          Selected stack (from the stack-selection stage):
+          {{ stack_selection }}
+
+          Ask user: "Want to set up GitHub Actions for automatic deployments on push? (yes/skip)"
+
+          IF YES:
+            STEP 1: Generate workflows
+              Run: amplifier-online cicd create --dry-run
+
+              Show preview:
+              ```
+              WORKFLOWS TO BE CREATED
+
+              [list generated workflow files]
+              ```
+
+            STEP 2: Create workflows if user approves
+              Run: amplifier-online cicd create
+
+            STEP 3: Guide GitHub secrets setup
+              Load @amplifier-online:context/agent/cicd-guide.md
+
+              Present required secrets based on the selected stack:
+
+              If the selected stack is web-app-aca, internal-service-aca, or web-app-awa:
+                For container workflows:
+                  - AZURE_CLIENT_ID
+                  - AZURE_TENANT_ID
+                  - AZURE_SUBSCRIPTION_ID
+
+                How to get these values:
+                [guide from cicd-guide.md]
+
+              If the selected stack is web-app-awa or static-web-app:
+                For Static Web App:
+                  - AZURE_STATIC_WEB_APPS_API_TOKEN
+
+                How to get: Azure Portal -> Static Web App -> Manage deployment token
+
+            STEP 4: Commit workflows
+              ```bash
+              git add .github/workflows/
+              git commit -m "Add CI/CD workflows for the selected stack"
+              git push
+              ```
+
+          IF SKIP:
+            "No problem. You can set up CI/CD later with: amplifier-online cicd create"
+
+          FINAL SUMMARY:
+            ```
+            DEPLOYMENT COMPLETE
+
+            Project: [name]
+            Stack: [selected stack]
+            URL: [deployment url]
+            CI/CD: [Configured | Skipped]
+
+            Next steps:
+            - Visit the deployment URL to see your app
+            - Monitor with: amplifier-online status
+            - View logs with: amplifier-online logs
+            - If CI/CD was configured, push to main branch to trigger automatic deployments
+            ```
+
+          Report whether CI/CD was configured or skipped at the end of your response.
+        output: "cicd_status"
+        timeout: 600
+
+  # ---------------------------------------------------------------------------
+  # Stage 10: Write project-specific deployment context into the repo's AGENTS.md
+  # ---------------------------------------------------------------------------
+  - name: "write-deployment-context"
+    approval:
+      required: true
+      prompt: |
+        Final step: write project-specific deployment context into the repo's AGENTS.md
+        so a future AI session can operate this deployed project.
+
+        Approve to write and commit the deployment context, or deny to skip.
+    steps:
+      - id: "write-deployment-context"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: Write Deployment Context
+
+          You have just completed a full deployment of this project. The key details are:
+          - Project directory: {{ project_dir }}
+          - Selected stack (from the stack-selection stage): {{ stack_selection }}
+          - Deployment details (extract the deployment URL from here): {{ deployment_result }}
+          - Verification results: {{ verification_status }}
+          - CI/CD status: {{ cicd_status }}
+
+          Your task is to write project-specific deployment context into the repo's AGENTS.md
+          so that a future AI session can immediately understand how to operate this deployed
+          project without re-discovering everything from scratch.
+
+          STEP 1: Find or create the AGENTS.md file
+            Check for an existing AGENTS.md at the project root ({{ project_dir }}/AGENTS.md).
+            If not found, check {{ project_dir }}/.amplifier/AGENTS.md.
+            If neither exists, create {{ project_dir }}/.amplifier/AGENTS.md.
+
+          STEP 2: Read the existing file content (if any)
+            If the file already contains an "Amplifier Online" section (or similar deployment
+            section), update it in place with current information. Do not duplicate.
+
+          STEP 3: Write the deployment context
+            Ensure the file contains the following project-specific operational information
+            that answers "how do I work with this deployed project?":
+
+            - Stack type (the selected stack) and what that means for this repo's architecture
+            - Live deployment URL (extracted from the deployment details above)
+            - Key CLI commands specific to this project: how to deploy, check status, view logs,
+              and tear down (e.g., `amplifier-online up`, `amplifier-online status`,
+              `amplifier-online logs`, `amplifier-online destroy`)
+            - CI/CD status: whether GitHub Actions workflows were set up in the previous stage
+            - Image naming convention used in this project's ACR (extracted from the manifest)
+
+            Keep the content concise and operational. A future AI session reading this file
+            should be able to deploy an update, check health, or debug a failure without
+            consulting external documentation.
+
+            Do NOT include: full CLI reference documentation, stack selection guidance,
+            general troubleshooting playbooks, or explanations of what Amplifier Online is.
+            Those belong in the bundle's context docs, not in the repo.
+
+          STEP 4: Commit the change
+            Stage the file and commit with an appropriate message, e.g.:
+            ```bash
+            git add AGENTS.md .amplifier/AGENTS.md
+            git commit -m "docs: add Amplifier Online deployment context to AGENTS.md"
+            ```
+        output: "context_write_status"
+        timeout: 600
