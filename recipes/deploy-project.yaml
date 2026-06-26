@@ -2,6 +2,28 @@
 # CHANGELOG
 # =============================================================================
 #
+# v1.0.1 (2026-06-26):
+#   - BUGFIX: Template variables never substituted at runtime (resolved empty),
+#     including cross-stage `output` values like {{project_profile}} and
+#     {{stack_selection}}, plus {{project_dir}} and all loop while_condition/
+#     break_when/update_context expressions.
+#     * ROOT CAUSE: The recipe used spaced delimiters `{{var}}`. The recipe
+#       engine's substitution regex (executor.py:2920
+#       `r"\{\{(\w+(?:\.\w+)*)\}\}"` and the whole-var fullmatch at
+#       executor.py:2879) requires the variable name to immediately follow `{{`
+#       with NO interior whitespace (`\w` excludes spaces). `{{var}}` does not
+#       match, so re.sub leaves the literal placeholder untouched and the agent
+#       receives an unsubstituted/empty reference. This affected EVERY templated
+#       reference in the file, not just the cross-stage ones.
+#     * FIX: Removed interior whitespace from all 30 template references:
+#       `{{var}}` -> `{{var}}`. No mechanism change needed — step `output`
+#       already threads into the shared context dict across stages
+#       (executor.py:1159-1160 `context[step.output] = result`), and staged
+#       approval prompts are rendered with the same substitute_variables call
+#       (executor.py:1249-1251).
+#     * RESULT: Cross-stage values and all other variables now substitute
+#       correctly in both step prompts and approval-gate prompts.
+#
 # v1.0.0 (2026-06-26):
 #   - CRITICAL FIX: Rewrote recipe to conform to the staged recipe schema.
 #     * ROOT CAUSE: The original draft used an invalid structure that produced
@@ -72,7 +94,7 @@ stages:
 
           You are in the **analyze** stage of the guided deployment recipe. Your task:
 
-          1. Scan the project directory at {{ project_dir }} using glob and grep
+          1. Scan the project directory at {{project_dir}} using glob and grep
           2. Follow the detection patterns in @amplifier-online:context/agent/project-analysis.md
           3. Detect: backend framework, frontend framework, containerization status
           4. Map detected patterns to stack recommendations (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
@@ -119,7 +141,7 @@ stages:
       prompt: |
         Stack analysis complete. Review the project profile and recommendation:
 
-        {{ project_profile }}
+        {{project_profile}}
 
         Approve to lock in the selected stack and continue to environment setup.
         Deny to stop and reconsider the stack choice.
@@ -132,7 +154,7 @@ stages:
 
           Present the recommendation from the analyze stage:
 
-          {{ project_profile }}
+          {{project_profile}}
 
           Ask the user:
           "The recommended stack is the one shown on the STACK RECOMMENDATION line above,
@@ -167,7 +189,7 @@ stages:
           STAGE: Environment Setup
 
           The user selected a stack in the previous stage. Refer to it here:
-          {{ stack_selection }}
+          {{stack_selection}}
 
           Run these checks in sequence. For each failure, provide remediation guidance.
 
@@ -202,11 +224,11 @@ stages:
           {"all_checks_passed": false}  (if any check still fails)
         output: "environment_status"
         parse_json: true
-        while_condition: "{{ environment_ready }} != 'true'"
-        break_when: "{{ environment_ready }} == 'true'"
+        while_condition: "{{environment_ready}} != 'true'"
+        break_when: "{{environment_ready}} == 'true'"
         max_while_iterations: 10
         update_context:
-          environment_ready: "{{ environment_status.all_checks_passed }}"
+          environment_ready: "{{environment_status.all_checks_passed}}"
         timeout: 900
 
   # ---------------------------------------------------------------------------
@@ -218,7 +240,7 @@ stages:
       prompt: |
         Manifest review complete:
 
-        {{ manifest_status }}
+        {{manifest_status}}
 
         Approve if the manifest looks correct to proceed to repository preparation.
         Deny to adjust manifest fields first.
@@ -230,9 +252,9 @@ stages:
           STAGE: Manifest Initialization
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
-          Project directory: {{ project_dir }}
+          Project directory: {{project_dir}}
 
           STEP 1: Check if amplifier-online.yaml exists
             Run: glob("amplifier-online.yaml")
@@ -283,7 +305,7 @@ stages:
           STAGE: Repository Preparation
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
           Run the repo readiness check from your operating principles.
 
@@ -326,11 +348,11 @@ stages:
           {"repo_ready": false}  (if any check still fails)
         output: "repo_status"
         parse_json: true
-        while_condition: "{{ repo_ready }} != 'true'"
-        break_when: "{{ repo_ready }} == 'true'"
+        while_condition: "{{repo_ready}} != 'true'"
+        break_when: "{{repo_ready}} == 'true'"
         max_while_iterations: 10
         update_context:
-          repo_ready: "{{ repo_status.repo_ready }}"
+          repo_ready: "{{repo_status.repo_ready}}"
         timeout: 900
 
   # ---------------------------------------------------------------------------
@@ -342,7 +364,7 @@ stages:
       prompt: |
         Build and push step summary:
 
-        {{ build_status }}
+        {{build_status}}
 
         Approve once container images are pushed to ACR (or if the stack is
         static-web-app, which has no images to push) to proceed to deployment.
@@ -355,7 +377,7 @@ stages:
           STAGE: Build and Push (Container stacks only)
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
           If the selected stack is static-web-app:
             SKIP this stage. The static-web-app stack doesn't use container images;
@@ -401,7 +423,7 @@ stages:
       prompt: |
         Deployment step summary:
 
-        {{ deployment_result }}
+        {{deployment_result}}
 
         Approve to confirm the deployment is complete and proceed to verification.
         Deny if the deployment did not complete successfully.
@@ -413,7 +435,7 @@ stages:
           STAGE: Deployment
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
           STEP 1: Dry-run preview
             Run: amplifier-online up --dry-run
@@ -456,10 +478,10 @@ stages:
           STAGE: Verification
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
           Deployment details (extract the deployment URL from here):
-          {{ deployment_result }}
+          {{deployment_result}}
 
           STEP 1: Check deployment status
             Run: amplifier-online status
@@ -507,7 +529,7 @@ stages:
       prompt: |
         Verification summary:
 
-        {{ verification_status }}
+        {{verification_status}}
 
         Approve to set up GitHub Actions CI/CD now, or deny to skip CI/CD setup.
     steps:
@@ -518,7 +540,7 @@ stages:
           STAGE: CI/CD Setup (Optional)
 
           Selected stack (from the stack-selection stage):
-          {{ stack_selection }}
+          {{stack_selection}}
 
           Ask user: "Want to set up GitHub Actions for automatic deployments on push? (yes/skip)"
 
@@ -605,20 +627,20 @@ stages:
           STAGE: Write Deployment Context
 
           You have just completed a full deployment of this project. The key details are:
-          - Project directory: {{ project_dir }}
-          - Selected stack (from the stack-selection stage): {{ stack_selection }}
-          - Deployment details (extract the deployment URL from here): {{ deployment_result }}
-          - Verification results: {{ verification_status }}
-          - CI/CD status: {{ cicd_status }}
+          - Project directory: {{project_dir}}
+          - Selected stack (from the stack-selection stage): {{stack_selection}}
+          - Deployment details (extract the deployment URL from here): {{deployment_result}}
+          - Verification results: {{verification_status}}
+          - CI/CD status: {{cicd_status}}
 
           Your task is to write project-specific deployment context into the repo's AGENTS.md
           so that a future AI session can immediately understand how to operate this deployed
           project without re-discovering everything from scratch.
 
           STEP 1: Find or create the AGENTS.md file
-            Check for an existing AGENTS.md at the project root ({{ project_dir }}/AGENTS.md).
-            If not found, check {{ project_dir }}/.amplifier/AGENTS.md.
-            If neither exists, create {{ project_dir }}/.amplifier/AGENTS.md.
+            Check for an existing AGENTS.md at the project root ({{project_dir}}/AGENTS.md).
+            If not found, check {{project_dir}}/.amplifier/AGENTS.md.
+            If neither exists, create {{project_dir}}/.amplifier/AGENTS.md.
 
           STEP 2: Read the existing file content (if any)
             If the file already contains an "Amplifier Online" section (or similar deployment
