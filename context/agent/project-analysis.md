@@ -220,6 +220,16 @@ Markers:
 - Python: `boto3` (S3), `azure-storage-blob`
 - Node: `@azure/storage-blob`, `multer` (file uploads), `formidable`
 
+**Speech / AI Services:**
+```bash
+grep("azure-cognitiveservices-speech|microsoft-cognitiveservices-speech-sdk|SpeechConfig|SpeechRecognizer|azure-ai-speech|SPEECH_KEY|SPEECH_ENDPOINT", path=".")
+```
+
+Markers:
+- Python: `azure-cognitiveservices-speech`, `azure-ai-speech` in requirements.txt
+- Node: `microsoft-cognitiveservices-speech-sdk` in package.json
+- Environment variable references: `SPEECH_KEY`, `SPEECH_ENDPOINT`, `SPEECH_REGION`
+
 ---
 
 ## Mapping: Project Pattern → Stack
@@ -395,6 +405,7 @@ Resources Detected:
   - Database: [PostgreSQL | MongoDB/Cosmos | None]
   - Cache: [Redis | None]
   - Storage: [File uploads/object storage | None]
+  - Speech/AI Services: [Azure Speech Services | None]
 
 STACK RECOMMENDATION: [web-app-aca | internal-service-aca | web-app-awa | static-web-app]
 

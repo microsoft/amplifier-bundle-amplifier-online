@@ -23,6 +23,7 @@ Match your application's architecture to a stack using these criteria:
 | Pure static site (no backend) | ❌ | ❌ | ❌ | ✅ |
 | Persistent volumes | ✅ | ✅ | ✅ | ❌ |
 | Needs managed databases | ✅ | ✅ | ✅ | ❌ |
+| Needs AI Speech Services | ✅ | ✅ | ✅ | ❌ |
 | Container-to-container networking | ✅ | ✅ | ❌ | ❌ |
 | GitHub-integrated CI/CD for frontend | ⚠️ | ❌ | ✅ | ✅ |
 | PR preview deployments | ⚠️ | ❌ | ✅ | ✅ |
@@ -42,13 +43,13 @@ Output:
 Available deployment stacks:
 
   web-app-aca
-    Azure Container Apps with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+    Azure Container Apps with Application Insights telemetry and optional Postgres, Cosmos, Redis, Storage, and Speech
 
   web-app-awa
-    Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, and Storage
+    Azure Web App (Linux container backend) + Static Web App (frontend) with Application Insights telemetry and optional Postgres, Cosmos, Redis, Storage, and Speech
 
   internal-service-aca
-    Internal-only Azure Container App — no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage
+    Internal-only Azure Container App — no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage/Speech
 
   static-web-app
     Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
@@ -68,6 +69,7 @@ Available deployment stacks:
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
+- **Optional: Azure AI Speech Services** (speech-to-text / text-to-speech)
 - **Networking** — automatic DNS, TLS certificates, ingress rules, container-to-container communication
 - **Authentication** — EasyAuth on web frontends (RedirectToLoginPage, always enforced); JWT middleware on API backends (token validation). Two Entra registrations: `ao-{project}-client` (login/MSAL.js client) and `ao-{project}-api` (audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability** — Application Insights (workspace-based)
@@ -141,6 +143,9 @@ resources:
   storage:
     enabled: false
     sku: Standard_LRS    # ← optional: Locally-redundant (default)
+  speech:
+    enabled: false
+    sku: S0              # ← optional: Standard tier (default)
 ```
 
 **Key concepts:**
@@ -187,6 +192,7 @@ nginx reverse-proxy hop, which drops the header unless you set it explicitly.
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
+- **Optional: Azure AI Speech Services** (speech-to-text / text-to-speech)
 - **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
 
@@ -243,6 +249,8 @@ resources:
   redis:
     enabled: false
   storage:
+    enabled: false
+  speech:
     enabled: false
 ```
 
@@ -485,6 +493,7 @@ frontend:
 - **Optional: Cosmos DB** (document database)
 - **Optional: Redis** (cache)
 - **Optional: ADLS Gen2 Storage** (blob/file storage)
+- **Optional: Azure AI Speech Services** (speech-to-text / text-to-speech)
 - **Networking** -- internal DNS only (`<project>-api.internal.<env-default-domain>`), reachable only within the Container Apps Environment; no public FQDN
 - **Authentication** -- no EasyAuth, no login client; one Entra registration `ao-{project}-api` (audience only, internal posture: no `access_as_user`, no APIM). Service-to-service auth via JWT middleware or managed identity tokens
 - **Observability** -- Application Insights (workspace-based)
@@ -554,6 +563,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  speech:
+    enabled: false
 ```
 
 **Key concepts:**
@@ -563,7 +574,7 @@ resources:
 - **Internal DNS** -- the container is reachable at `<project>-api.internal.<env-default-domain>` from other containers in the same CAE
 - Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode).
-- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage
+- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage, speech
 
 ### Service-to-service authentication
 

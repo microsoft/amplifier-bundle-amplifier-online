@@ -132,7 +132,7 @@ of 12 turns, then summarize open questions and return.
 
 4. **Manifest review checks:** ACR image-reference format, container ports match the application,
    `protected` values are valid (shorthand string or object form with `mode` + `exclude` for services; `login` or `false` for frontend), optional resource toggles
-   (`postgres`, `cosmos`, `redis`, `storage`) are intentional, and the `stack:` field matches
+   (`postgres`, `cosmos`, `redis`, `storage`, `speech`) are intentional, and the `stack:` field matches
    what was selected.
 
 5. **Prefer `--dry-run` before destructive ops.** When the user is about to run `up`, `destroy`, or

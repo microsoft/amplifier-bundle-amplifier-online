@@ -116,6 +116,7 @@ stages:
             - Database needs: [PostgreSQL/MongoDB/None - based on requirements/package.json]
             - Cache needs: [Redis detected | None]
             - Storage needs: [File uploads/object storage | None]
+            - Speech/AI Services needs: [Azure Speech Services | None]
 
           STACK RECOMMENDATION: [stack-name]
 

@@ -78,6 +78,9 @@ resources:
   storage:
     enabled: <bool>           # Provision ADLS Gen2 storage
     sku: <sku-name>           # Optional: SKU tier (default: Standard_LRS)
+  speech:
+    enabled: <bool>           # Provision Azure AI Speech Services
+    sku: <sku-name>           # Optional: SKU tier (default: S0)
 ```
 
 ---
@@ -243,6 +246,8 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 - **redis**: Provisions a Redis cache instance; injected as `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`
 - **storage**: Provisions ADLS Gen2 blob storage; injected as `STORAGE_ACCOUNT`, `STORAGE_FILESYSTEM`,
   `STORAGE_ENDPOINT` — no key is injected, access is via the container's managed identity (RBAC)
+- **speech**: Provisions Azure AI Speech Services; injected as `SPEECH_ENDPOINT`, `SPEECH_KEY`,
+  `SPEECH_REGION`
 
 ---
 
@@ -285,6 +290,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  speech:
+    enabled: false
 ```
 
 ### Stack: web-app-aca with volume
@@ -309,6 +316,8 @@ services:
 
 resources:
   postgres:
+    enabled: false
+  speech:
     enabled: false
 ```
 
@@ -341,6 +350,8 @@ resources:
   redis:
     enabled: false
   storage:
+    enabled: false
+  speech:
     enabled: false
 ```
 
@@ -386,6 +397,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  speech:
+    enabled: false
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -411,6 +424,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  speech:
+    enabled: false
 ```
 
 ---
@@ -426,7 +441,7 @@ resources:
 | API service auth | Never gets EasyAuth. Use JWT middleware (`jwt_middleware.py`) for token validation. |
 | Auth | Entra registration created when any service has auth enabled (default for web/api roles) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, speech |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
@@ -440,7 +455,7 @@ resources:
 | Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
 | Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, speech |
 | Dockerfiles | Must exist for the API service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Container must expose `/health` -> 200 OK |
@@ -454,7 +469,7 @@ resources:
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
 | Frontend auth | Always enforced: `protected: login` (sign-in required via `staticwebapp.config.json`) |
 | Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, speech |
 | GitHub repo | Frontend code must be in GitHub |
 | CORS | API service must allow frontend origin |
 
@@ -606,6 +621,25 @@ from azure.storage.blob import BlobServiceClient
 blob_service = BlobServiceClient(
     account_url=f"https://{os.environ['STORAGE_ACCOUNT']}.blob.core.windows.net",
     credential=DefaultAzureCredential(),
+)
+```
+
+### Injected When `speech.enabled: true`
+
+| Variable | Type | Value | Use Case |
+|----------|------|-------|----------|
+| `SPEECH_ENDPOINT` | string | Speech service endpoint URL | STT/TTS API calls |
+| `SPEECH_KEY` | string | Primary API key | Authentication |
+| `SPEECH_REGION` | string | Azure region (e.g., `westus2`) | SDK region config |
+
+**Example usage (Python with azure-cognitiveservices-speech):**
+```python
+import os
+import azure.cognitiveservices.speech as speechsdk
+
+speech_config = speechsdk.SpeechConfig(
+    subscription=os.environ["SPEECH_KEY"],
+    region=os.environ["SPEECH_REGION"],
 )
 ```
 
