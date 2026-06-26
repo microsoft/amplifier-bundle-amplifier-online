@@ -362,6 +362,15 @@ back, leading to corruption or I/O errors.
 single-instance enforcement guarantees only one container instance writes to the database.
 Do NOT use WAL mode — its shared memory files are incompatible with SMB.
 
+**Should you switch to PostgreSQL?** If the application uses SQLite for primary
+application data (user records, orders, sessions — not an embedded cache or FTS index),
+the recommended fix is to enable `resources.postgres.enabled: true` in the manifest
+rather than applying the VFS workaround. This eliminates the SMB locking constraint
+entirely, provides a managed database that survives container instance replacement,
+and connection credentials are injected automatically via `POSTGRES_CONNECTION_STRING`.
+The VFS workaround is appropriate for file-adjacent data where a separate database
+server is overkill.
+
 ---
 
 ## Failure Mode 13: web-app-awa Volume mount_path Missing `/mounts/` Prefix

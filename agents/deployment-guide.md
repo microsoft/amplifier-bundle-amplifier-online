@@ -131,9 +131,16 @@ of 12 turns, then summarize open questions and return.
    - Build command is specified correctly
 
 4. **Manifest review checks:** ACR image-reference format, container ports match the application,
-   `protected` values are valid (shorthand string or object form with `mode` + `exclude` for services; `login` or `false` for frontend), optional resource toggles
-   (`postgres`, `cosmos`, `redis`, `storage`) are intentional, and the `stack:` field matches
-   what was selected.
+   and the `stack:` field matches what was selected. If a `protected` field appears in a manifest,
+   note it as deprecated and recommend removal — do not flag it as a validation error (it is
+   silently ignored by the platform). **The following are VALID and must NOT be flagged as errors:**
+   - Resource blocks without `enabled: true` (e.g. `postgres:` with only `sku:` and `type:`) —
+     `enabled` defaults to `true` when the block exists
+   - Resource block fields (`sku`, `type`, `storage_mb`, `throughput`, `capacity`) — these are
+     valid platform-managed config
+   - `${VAR}` interpolation in env values (e.g. `${POSTGRES_CONNECTION_STRING}`) — resolved at
+     deploy time; `POSTGRES_CONNECTION_STRING` is auto-injected when postgres is configured
+   - Both `env:` formats: list of `{name, value}` objects and YAML map (`KEY: VALUE`)
 
 5. **Prefer `--dry-run` before destructive ops.** When the user is about to run `up`, `destroy`, or
    `cicd create` for the first time, proactively suggest `--dry-run` to preview without side effects.

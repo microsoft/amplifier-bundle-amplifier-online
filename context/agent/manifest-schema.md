@@ -62,23 +62,48 @@ auth:
     - api_app_id: <guid>     # External/BYO producer
       base_url: https://api.example/
 
-# Optional: resource flags (defaults to all disabled)
+# Optional: resource flags
+# IMPORTANT: `enabled` is OPTIONAL — when a resource block exists with ANY fields
+# (sku, type, storage_mb, etc.), `enabled` defaults to TRUE. A resource block
+# without `enabled: true` is VALID and provisions the resource.
+# Do NOT flag a missing `enabled` field as an error — it is not required.
+# Do NOT flag resource fields (sku, type, storage_mb, throughput, capacity) as
+# invalid during manifest review — they are valid platform-managed config.
 resources:
   postgres:
-    enabled: <bool>           # Provision a Postgres database for this project
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
     sku: <sku-name>           # Optional: SKU tier (default: B_Gen5_1)
+    type: <server-type>       # Optional: e.g., flexible-server (default: flexible-server)
     storage_mb: <integer>     # Optional: Storage in MB (default: 5120)
   cosmos:
-    enabled: <bool>           # Provision a Cosmos DB (document store)
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
     throughput: <integer>     # Optional: RU/s (default: 400)
   redis:
-    enabled: <bool>           # Provision a Redis cache
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
     sku: <sku-name>           # Optional: SKU tier (default: Basic)
     capacity: <integer>       # Optional: Capacity (default: 0 for C0)
   storage:
-    enabled: <bool>           # Provision ADLS Gen2 storage
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
     sku: <sku-name>           # Optional: SKU tier (default: Standard_LRS)
 ```
+
+---
+
+## IMPORTANT: Valid Patterns That Must NOT Be Flagged as Errors
+
+During manifest review, the following patterns are **valid** and must NOT be reported as
+errors, warnings, or blockers. Flagging any of these is a **false positive**.
+
+| Pattern | Why it is valid |
+|---------|-----------------|
+| `resources.postgres:` block without `enabled: true` | `enabled` defaults to `true` when the block exists. A postgres block with only `sku:` and `type:` is valid and provisions the database. |
+| `resources.postgres.type: azure-postgres-flexible` | Valid resource config field — platform-managed. |
+| `resources.postgres.sku: B_Standard_B1ms` | Valid resource config field — platform-managed. |
+| `resources.postgres.storage_mb: 32768` | Valid resource config field — platform-managed. |
+| `env:` value containing `${POSTGRES_CONNECTION_STRING}` | Variable interpolation — resolved at deploy time to the auto-injected connection string. Valid syntax. |
+| `env:` value containing `${VAR_NAME}` | Variable interpolation — all `${...}` references in env values are resolved at deploy time. Valid syntax. |
+| `env:` as YAML map (`env: {KEY: VALUE}`) | Both list-of-objects and map forms are accepted. |
+| `env:` as list of `{name, value}` objects | Standard form, always valid. |
 
 ---
 
@@ -208,6 +233,15 @@ conn.execute("PRAGMA foreign_keys = ON")
 **Why this is safe:** The platform enforces `maxReplicas=1` when a volume is present, so there
 is never concurrent access from multiple container instances. The lockless `unix-none` VFS is
 appropriate because only one process ever writes.
+
+> **Prefer PostgreSQL for relational data.** If your application uses SQLite for structured
+> application data (user records, orders, sessions — not embedded caching or FTS indexes),
+> strongly recommend enabling `resources.postgres` instead. The platform provisions a managed
+> PostgreSQL Flexible Server with no SMB locking constraints, connection credentials are
+> injected automatically via `POSTGRES_CONNECTION_STRING`, and the database survives container
+> instance replacement. The SQLite-on-volume workaround above is appropriate only for
+> file-adjacent data (e.g., FTS indexes, embedded caches, append-only logs) where a separate
+> database server is overkill.
 
 ### `frontend.protected`
 - **Always `login`.** All browser-facing frontends require sign-in — this is enforced by the platform.
@@ -624,12 +658,25 @@ services:
         value: "some-value"
       - name: FEATURE_FLAG_X
         value: "true"
+      - name: DATABASE_URL
+        value: ${POSTGRES_CONNECTION_STRING}   # variable interpolation is valid
 ```
+
+**Syntax:** `env` must be a YAML list of `{name, value}` objects as shown above. A YAML
+mapping (`env: {KEY: VALUE}`) is also accepted — the platform normalizes both forms.
+Do NOT flag either format as an error during manifest review.
 
 **Rules:**
 - Custom env vars are merged with auto-injected vars
 - Auto-injected vars take precedence (you cannot override `DB_PASSWORD`, `AZURE_CLIENT_ID`, etc.)
 - Use custom env vars for feature flags and non-resource config
+- **Variable interpolation is supported.** Env values support `${VAR_NAME}` syntax for
+  referencing platform-injected variables. For example, `value: ${POSTGRES_CONNECTION_STRING}`
+  resolves at deploy time to the auto-injected connection string. This is **valid manifest syntax**
+  — do NOT flag it as an error during manifest review. `POSTGRES_CONNECTION_STRING` is
+  auto-injected by the platform when `resources.postgres` is configured (even without an
+  explicit `enabled: true` — see resource defaults above). Other auto-injected vars include
+  `DB_PASSWORD`, `COSMOS_KEY`, `REDIS_PASSWORD`, `AZURE_CLIENT_ID`, etc.
 - **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a
   secret in a plain `env:` value; rely on the auto-injected resource credentials instead.
 - **How the auto-injected credentials are stored differs by stack:** on `web-app-aca` and

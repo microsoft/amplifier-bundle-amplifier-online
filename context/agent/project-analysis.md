@@ -220,6 +220,21 @@ Markers:
 - Python: `boto3` (S3), `azure-storage-blob`
 - Node: `@azure/storage-blob`, `multer` (file uploads), `formidable`
 
+**SQLite (evaluate migration to PostgreSQL):**
+```bash
+grep("sqlite3|aiosqlite|sqlite://|sqlite\+aiosqlite", path=".")
+```
+
+Markers:
+- Python: `sqlite3`, `aiosqlite` in requirements.txt or imports
+- SQLAlchemy: `sqlite://` or `sqlite+aiosqlite://` connection strings
+
+If SQLite is detected and the application uses it for primary relational data (user records,
+orders, sessions), recommend evaluating `resources.postgres` instead. PostgreSQL eliminates
+SMB file-locking constraints on Azure Files volumes, survives container instance replacement,
+and credentials are injected automatically. SQLite-on-volume is appropriate only for
+file-adjacent data (FTS indexes, embedded caches, append-only logs).
+
 ---
 
 ## Mapping: Project Pattern → Stack
