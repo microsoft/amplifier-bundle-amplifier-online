@@ -80,7 +80,7 @@ resources:
     throughput: <integer>     # Optional: RU/s (default: 400)
   redis:
     enabled: <bool>           # OPTIONAL (default: true when block exists)
-    sku: <sku-name>           # Optional: SKU tier (default: Basic)
+                              # Shared Azure Managed Redis; keyless (managed identity), no per-project sizing
     capacity: <integer>       # Optional: Capacity (default: 0 for C0)
   storage:
     enabled: <bool>           # OPTIONAL (default: true when block exists)
@@ -273,8 +273,10 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
 - **postgres**: Adds a database and user on the shared PostgreSQL server; injected as
   `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`)
-- **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `COSMOS_KEY`
-- **redis**: Provisions a Redis cache instance; injected as `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`
+- **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE` —
+  no key, access is keyless via the container's managed identity (RBAC data role)
+- **redis**: Grants keyless access to the shared Azure Managed Redis cache; injected as
+  `REDIS_HOST`, `REDIS_PORT` — no password, access is via the container's managed identity
 - **storage**: Provisions ADLS Gen2 blob storage; injected as `STORAGE_ACCOUNT`, `STORAGE_FILESYSTEM`,
   `STORAGE_ENDPOINT` — no key is injected, access is via the container's managed identity (RBAC)
 
@@ -577,46 +579,59 @@ conn = await asyncpg.connect(
 |----------|------|-------|----------|
 | `COSMOS_ENDPOINT` | string | Cosmos DB endpoint URL | Document database access |
 | `COSMOS_DATABASE` | string | Database name (project name, `-` → `_`) | |
-| `COSMOS_KEY` | string | Primary key (see secrets note below) | |
 
-There is no `COSMOS_CONNECTION_STRING`. On **internal-service-aca** only `COSMOS_ENDPOINT` and
-`COSMOS_DATABASE` are injected — there is **no `COSMOS_KEY`**; access is via the container
-identity's Cosmos DB Data Contributor RBAC role (`DefaultAzureCredential`).
+Cosmos is **keyless on every stack**: only `COSMOS_ENDPOINT` and `COSMOS_DATABASE` are injected —
+there is **no `COSMOS_KEY`** and no `COSMOS_CONNECTION_STRING`. Access is via the container
+identity's Cosmos DB Built-in Data Contributor RBAC role (`DefaultAzureCredential`).
 
 **Example usage (Python with azure-cosmos):**
 ```python
 import os
 from azure.cosmos import CosmosClient
+from azure.identity import DefaultAzureCredential
 
 client = CosmosClient(
     url=os.environ["COSMOS_ENDPOINT"],
-    credential=os.environ["COSMOS_KEY"],
+    credential=DefaultAzureCredential(),
 )
 database = client.get_database_client(os.environ["COSMOS_DATABASE"])
 ```
 
 ### Injected When `redis.enabled: true`
 
+The shared cache is **Azure Managed Redis**, keyless: the container's managed identity is
+granted a data-access policy on the cache. No password is injected — only host and port.
+
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `REDIS_HOST` | string | Redis server FQDN | Cache access |
-| `REDIS_PORT` | string | Port (`6380`, SSL) | |
-| `REDIS_PASSWORD` | string | Access key (see secrets note below) | |
+| `REDIS_HOST` | string | Azure Managed Redis FQDN (`.redis.azure.net`) | Cache access |
+| `REDIS_PORT` | string | Port (`10000`, TLS) | |
 
-There is no `REDIS_CONNECTION_STRING`.
+There is no `REDIS_PASSWORD` and no `REDIS_CONNECTION_STRING` — the app authenticates with its
+managed identity (an Entra Redis client supplies the identity's object id as username and a
+refreshing token as password).
 
-**Example usage (Python with redis):**
+**Example usage (Python with redis + redis-entraid):**
 ```python
 import os
 import redis
+from redis_entraid.cred_provider import create_from_default_azure_credential
+
+# Managed identity in the cloud; your `az login` locally.
+cred = create_from_default_azure_credential(("https://redis.azure.com/.default",))
 
 r = redis.Redis(
     host=os.environ["REDIS_HOST"],
-    port=int(os.environ["REDIS_PORT"]),
-    password=os.environ["REDIS_PASSWORD"],
-    ssl=True
+    port=int(os.environ["REDIS_PORT"]),  # 10000
+    ssl=True,
+    credential_provider=cred,
 )
 ```
+
+**Local dev:** `localhost` + the credential provider won't work (no IMDS token source locally;
+a local Redis can't validate Entra tokens). Run a local Redis container and branch on
+`ENVIRONMENT=development`, or grant your user identity an access-policy assignment on the real
+cache (Azure RBAC roles do not grant Redis data-plane access).
 
 ### Injected When `storage.enabled: true`
 
@@ -676,14 +691,16 @@ Do NOT flag either format as an error during manifest review.
   — do NOT flag it as an error during manifest review. `POSTGRES_CONNECTION_STRING` is
   auto-injected by the platform when `resources.postgres` is configured (even without an
   explicit `enabled: true` — see resource defaults above). Other auto-injected vars include
-  `DB_PASSWORD`, `COSMOS_KEY`, `REDIS_PASSWORD`, `AZURE_CLIENT_ID`, etc.
+  `DB_PASSWORD`, `AZURE_CLIENT_ID`, etc. (Cosmos, Redis, and Storage are keyless — no key or
+  password is injected for them.)
 - **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a
   secret in a plain `env:` value; rely on the auto-injected resource credentials instead.
-- **How the auto-injected credentials are stored differs by stack:** on `web-app-aca` and
-  `internal-service-aca`, `DB_PASSWORD`/`COSMOS_KEY`/`REDIS_PASSWORD` are Container Apps
-  `secretRef`s (platform-backed, not plaintext). On **`web-app-awa` these same credentials are
-  injected as plaintext app-setting values** (visible in the Azure portal). Storage uses no key
-  on any stack (managed-identity/RBAC).
+- **How the auto-injected credentials are stored differs by stack:** the only remaining
+  injected secret is the Postgres password — on `web-app-aca` and `internal-service-aca`
+  `DB_PASSWORD` is a Container Apps `secretRef` (platform-backed, not plaintext); on
+  **`web-app-awa` it is injected as a plaintext app-setting value** (visible in the Azure
+  portal). Cosmos, Redis, and Storage are keyless on every stack (managed-identity/RBAC), so
+  no key/password is injected for them.
 
 ---
 

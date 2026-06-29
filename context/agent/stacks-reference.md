@@ -135,8 +135,7 @@ resources:
     enabled: false
     throughput: 400      # ← optional: RU/s (default)
   redis:
-    enabled: false
-    sku: Basic           # ← optional: Basic tier (default)
+    enabled: false       # ← shared Azure Managed Redis (keyless, managed identity)
     capacity: 0          # ← optional: C0 (250 MB, default)
   storage:
     enabled: false
@@ -190,7 +189,7 @@ nginx reverse-proxy hop, which drops the header unless you set it explicitly.
 - **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
 
-> **Resource access (awa-specific):** unlike the Container Apps stacks, the backend's managed identity gets **no RBAC** on Cosmos/Storage, and resource credentials are injected as **plaintext app settings** (not Key Vault secret refs). Cosmos works via the injected `COSMOS_KEY`; **Storage has neither a key nor an RBAC grant**, so keyless (`DefaultAzureCredential`) access requires a manual role assignment. (Injected variable names: see `manifest-schema.md`.)
+> **Resource access (awa-specific):** Cosmos and Redis are keyless — the backend's managed identity is granted a Cosmos DB Data Contributor role (and the per-project database is created) and a Redis access policy, both via platform-RG modules, so no key is injected. The only injected secret is the Postgres password, which on this stack is a **plaintext app setting** (not a Key Vault secret ref). **Storage** still has neither a key nor an RBAC grant on this stack, so keyless Storage access would require a manual role assignment — prefer `web-app-aca` for keyless Storage. (Injected variable names: see `manifest-schema.md`.)
 
 ### Best for
 
