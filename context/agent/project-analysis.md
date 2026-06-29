@@ -211,6 +211,11 @@ Markers:
 - Python: `redis`, `aioredis` in requirements.txt
 - Node: `ioredis`, `redis` in package.json
 
+> The platform's Redis is **Azure Managed Redis, keyless** — apps authenticate with their
+> managed identity, not a password. A project using Redis needs an Entra-capable client
+> (`redis-entraid` for Python, `Microsoft.Azure.StackExchangeRedis` for .NET) and connects on
+> port `10000`. Flag this if the detected code uses static `REDIS_PASSWORD` auth.
+
 **Storage (File uploads, object storage):**
 ```bash
 grep("boto3|azure-storage|@azure/storage-blob|multer|formidable", path=".")
