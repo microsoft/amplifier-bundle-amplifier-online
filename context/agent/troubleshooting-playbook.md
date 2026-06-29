@@ -166,12 +166,19 @@ amplifier-online status                  # Check if container apps are running
 - The user account running `amplifier-online up` doesn't have permission to create Entra app registrations
 - The redirect URI wasn't updated after deployment (can happen on first deploy)
 - The app registration was manually deleted outside of Amplifier Online
+- **`enableIdTokenIssuance` is off on the `-client` registration.** ACA EasyAuth runs secretless
+  in this tenant, so it relies on the implicit `id_token` from `/authorize`; without it sign-in
+  fails with `AADSTS700054: response_type 'id_token' is not enabled for the application`. (Every
+  login client needs this — SWA/AWA hybrid OIDC and ACA EasyAuth alike. The platform sets it on
+  managed registrations; a BYO/reused reg must set it manually.)
 
 **Fix:**
 1. Verify you have permission to create app registrations in the tenant
 2. Re-run `amplifier-online up` to re-create/update the Entra registration — it's idempotent
 3. If redirect loops persist, check that the Container App's FQDN matches the redirect URI in the Entra app registration
-4. If the app registration is missing: `amplifier-online up` will recreate it
+4. If sign-in fails with `AADSTS700054`, enable ID-token issuance on the `-client` reg:
+   `az ad app update --id <client-app-id> --enable-id-token-issuance true`
+5. If the app registration is missing: `amplifier-online up` will recreate it
 
 **Note:** `up` automatically handles app registration creation and redirect URI configuration
 **only for platform-managed registrations**. A BYO client app (`auth.client_app_id`) is never

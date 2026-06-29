@@ -410,7 +410,10 @@ the Bicep template) and use it as the OAuth client ID for the built-in AAD login
 also needs the project's Entra **client** app registration to have two things, or login fails at
 runtime even when `staticwebapp.config.json` is correct:
 - **'ID tokens' enabled** (Authentication > Implicit grant and hybrid flows) — SWA's built-in AAD
-  provider uses a hybrid OIDC flow that requires an `id_token` from `/authorize`.
+  provider uses a hybrid OIDC flow that requires an `id_token` from `/authorize`. This is **not
+  SWA-specific**: every login client needs it — AWA's frontend is also a Static Web App, and ACA
+  EasyAuth (secretless in this tenant) likewise falls back to the implicit `id_token`. A missing
+  flag fails sign-in with `AADSTS700054` on any of these stacks.
 - the **`https://{swa-hostname}/.auth/login/aad/callback`** redirect URI (Web).
 
 For **platform-managed** registrations the provisioner sets both automatically. For a **BYO**
