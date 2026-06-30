@@ -138,6 +138,8 @@ of 12 turns, then summarize open questions and return.
      `enabled` defaults to `true` when the block exists
    - Resource block fields (`sku`, `type`, `storage_mb`, `throughput`, `capacity`) — these are
      valid platform-managed config
+   - The `cognitive-services` resource (shared multi-service Azure AI Services, keyless) alongside
+     `postgres`, `cosmos`, `redis`, `storage` — all valid on the backend stacks (not `static-web-app`)
    - `${VAR}` interpolation in env values (e.g. `${POSTGRES_CONNECTION_STRING}`) — resolved at
      deploy time; `POSTGRES_CONNECTION_STRING` is auto-injected when postgres is configured
    - Both `env:` formats: list of `{name, value}` objects and YAML map (`KEY: VALUE`)

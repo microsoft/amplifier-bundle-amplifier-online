@@ -225,6 +225,22 @@ Markers:
 - Python: `boto3` (S3), `azure-storage-blob`
 - Node: `@azure/storage-blob`, `multer` (file uploads), `formidable`
 
+**Cognitive Services (Speech / Vision / Language / Document Intelligence / AI Services):**
+```bash
+grep("azure-cognitiveservices-speech|azure-ai-vision|azure-ai-textanalytics|azure-ai-documentintelligence|azure-ai-translation|microsoft-cognitiveservices-speech-sdk|SPEECH_KEY|SPEECH_ENDPOINT|COGNITIVE_SERVICES_", path=".")
+```
+
+Markers:
+- Python: `azure-cognitiveservices-speech`, `azure-ai-vision`, `azure-ai-textanalytics`, `azure-ai-documentintelligence`, `azure-ai-translation-*`
+- Node: `microsoft-cognitiveservices-speech-sdk`, `@azure-rest/ai-vision-*`, `@azure/ai-text-analytics`, `@azure/ai-form-recognizer`
+- Env-var markers: `SPEECH_KEY`, `SPEECH_ENDPOINT`, `SPEECH_REGION`, `COGNITIVE_SERVICES_*`, `AZURE_AI_*`
+
+> The platform's Cognitive Services is a **shared multi-service Azure AI Services account, keyless** —
+> apps authenticate with their managed identity (Cognitive Services User role), not a key. Enable
+> `resources.cognitive-services`; the app receives `COGNITIVE_SERVICES_ENDPOINT/REGION/RESOURCE_ID`
+> (plus `SPEECH_ENDPOINT`/`SPEECH_REGION`/`SPEECH_RESOURCE_ID` aliases) and should use `DefaultAzureCredential`. Flag this
+> if the detected code uses a static `SPEECH_KEY` / API key.
+
 **SQLite (evaluate migration to PostgreSQL):**
 ```bash
 grep("sqlite3|aiosqlite|sqlite://|sqlite\+aiosqlite", path=".")
@@ -322,7 +338,7 @@ file-adjacent data (FTS indexes, embedded caches, append-only logs).
 - Container Apps Environment provides internal DNS for service-to-service calls
 - No EasyAuth overhead; gets an `-api` registration only (no `-client`), and `access_as_user`/APIM are exposed only if user-facing (`auth.expose: true`)
 - Service-to-service auth via JWT middleware or managed identity tokens
-- Same optional resources (postgres, cosmos, redis, storage) as `web-app-aca`
+- Same optional resources (postgres, cosmos, redis, storage, cognitive-services) as `web-app-aca`
 
 **Not suitable if:**
 - Service needs to be reachable from the public internet
@@ -415,6 +431,7 @@ Resources Detected:
   - Database: [PostgreSQL | MongoDB/Cosmos | None]
   - Cache: [Redis | None]
   - Storage: [File uploads/object storage | None]
+  - Cognitive Services: [Speech/Vision/Language/Document Intelligence | None]
 
 STACK RECOMMENDATION: [web-app-aca | internal-service-aca | web-app-awa | static-web-app]
 
