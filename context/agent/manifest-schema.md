@@ -85,6 +85,11 @@ resources:
   storage:
     enabled: <bool>           # OPTIONAL (default: true when block exists)
     sku: <sku-name>           # Optional: SKU tier (default: Standard_LRS)
+  cognitive-services:
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
+                              # Shared multi-service Azure AI Services (Speech/Vision/Language/
+                              # Document Intelligence/Translator/Content Safety); keyless (managed
+                              # identity), no per-project sizing. Not available on static-web-app.
 ```
 
 ---
@@ -279,6 +284,12 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
   `REDIS_HOST`, `REDIS_PORT` — no password, access is via the container's managed identity
 - **storage**: Provisions ADLS Gen2 blob storage; injected as `STORAGE_ACCOUNT`, `STORAGE_FILESYSTEM`,
   `STORAGE_ENDPOINT` — no key is injected, access is via the container's managed identity (RBAC)
+- **cognitive-services**: Grants keyless access to the shared multi-service Azure AI Services account
+  (Speech, Vision, Language, Document Intelligence, Translator, Content Safety under one endpoint);
+  injected as `COGNITIVE_SERVICES_ENDPOINT`, `COGNITIVE_SERVICES_REGION`, `COGNITIVE_SERVICES_RESOURCE_ID`
+  (plus `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_RESOURCE_ID` aliases for Speech-SDK ergonomics —
+  the resource ID is needed for text-to-speech / speaker recognition) —
+  no key, access is via the container's managed identity (Cognitive Services User role)
 
 ---
 
@@ -320,6 +331,8 @@ resources:
   redis:
     enabled: false
   storage:
+    enabled: false
+  cognitive-services:
     enabled: false
 ```
 
@@ -378,6 +391,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  cognitive-services:
+    enabled: false
 ```
 
 ### Stack: static-web-app (pure static site)
@@ -422,6 +437,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  cognitive-services:
+    enabled: false
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -447,6 +464,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  cognitive-services:
+    enabled: false
 ```
 
 ---
@@ -462,7 +481,7 @@ resources:
 | API service auth | Never gets EasyAuth. Use JWT middleware (`jwt_middleware.py`) for token validation. |
 | Auth | Entra registration created when any service has auth enabled (default for web/api roles) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
@@ -476,7 +495,7 @@ resources:
 | Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
 | Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
 | Dockerfiles | Must exist for the API service (not part of manifest, but prerequisite) |
 | Build/push | Must be done BEFORE `amplifier-online up` |
 | Health endpoints | Container must expose `/health` -> 200 OK |
@@ -490,7 +509,7 @@ resources:
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
 | Frontend auth | Always enforced: `protected: login` (sign-in required via `staticwebapp.config.json`) |
 | Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
 | GitHub repo | Frontend code must be in GitHub |
 | CORS | API service must allow frontend origin |
 

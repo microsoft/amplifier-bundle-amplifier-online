@@ -140,6 +140,8 @@ resources:
   storage:
     enabled: false
     sku: Standard_LRS    # ← optional: Locally-redundant (default)
+  cognitive-services:
+    enabled: false       # ← shared multi-service Azure AI Services (keyless, managed identity)
 ```
 
 **Key concepts:**
@@ -243,6 +245,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  cognitive-services:
+    enabled: false       # shared multi-service Azure AI Services (keyless, managed identity)
 ```
 
 **Important:** `output_location` must match your actual build output:
@@ -556,6 +560,8 @@ resources:
     enabled: false
   storage:
     enabled: false
+  cognitive-services:
+    enabled: false       # shared multi-service Azure AI Services (keyless, managed identity)
 ```
 
 **Key concepts:**
@@ -565,7 +571,7 @@ resources:
 - **Internal DNS** -- the container is reachable at `<project>-api.internal.<env-default-domain>` from other containers in the same CAE
 - Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode).
-- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage
+- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage, cognitive-services
 
 ### Service-to-service authentication
 

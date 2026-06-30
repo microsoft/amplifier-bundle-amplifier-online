@@ -116,6 +116,7 @@ stages:
             - Database needs: [PostgreSQL/MongoDB/None - based on requirements/package.json]
             - Cache needs: [Redis detected | None]
             - Storage needs: [File uploads/object storage | None]
+            - Cognitive Services needs: [Speech/Vision/Language/Document Intelligence | None]
 
           STACK RECOMMENDATION: [stack-name]
 
