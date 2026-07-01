@@ -293,11 +293,14 @@ appropriate because only one process ever writes.
   egress originates; `vnet` = the whole VNet) or a CIDR. There is **no public ingress** regardless.
 - `image` — optional OS image block (`publisher`/`offer`/`sku`/`version`); defaults to Ubuntu
   24.04 LTS.
-- **No Postgres.** The `vm` stack supports `cosmos`, `redis`, `storage`, and `cognitive-services`
-  only (see `resources` below). Resource access is **RBAC-only via the VM's managed identity — no
-  env vars are injected** (unlike container stacks). Software on the VM authenticates with
-  `DefaultAzureCredential`/IMDS and must be told the shared resource endpoints itself (e.g. via
-  cloud-init).
+- **Resources.** The `vm` stack supports `cosmos`, `redis`, `storage`, and `cognitive-services`
+  (see `resources` below). Enabling one grants the VM's managed identity keyless RBAC **and** writes
+  the same connection info the ACA stacks inject as env vars to **`/etc/amplifier-online/resources.env`**
+  on the VM — written by a Run Command and **refreshed on every `up`** (so a resource added later
+  reaches the VM). Software authenticates with `DefaultAzureCredential`/IMDS and reads endpoints from
+  that file; source it at **service start** (systemd/`runcmd`), not at cloud-init parse time — it
+  lands shortly after boot. **Postgres is not yet supported on `vm`** (deferred — it carries a
+  secret).
 
 ### `auth` (top-level — registration model)
 
@@ -320,13 +323,13 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 ### `resources`
 - **Optional** (all disabled by default).
 - **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, `web-app-awa`, and `vm`)
-- **`vm` caveat:** supports `cosmos`, `redis`, `storage`, and `cognitive-services` **but NOT
-  `postgres`** (Postgres uses password auth, not managed identity). On `vm`, access is granted as
-  RBAC on the VM's managed identity — **the connection env vars below are NOT injected** (that
-  mechanism is container-only); the VM authenticates via `DefaultAzureCredential`/IMDS.
+- **`vm` caveat:** supports `cosmos`, `redis`, `storage`, and `cognitive-services` **but not yet
+  `postgres`** (deferred — it carries a secret). On `vm`, the same connection variables below are
+  written to `/etc/amplifier-online/resources.env` (via a Run Command, refreshed on `up`) rather than
+  injected as container env vars; the VM authenticates via `DefaultAzureCredential`/IMDS.
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
 - **postgres**: Adds a database and user on the shared PostgreSQL server; injected as
-  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`). *(Not available on
+  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`). *(Not yet available on
   the `vm` stack.)*
 - **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE` —
   no key, access is keyless via the container's managed identity (RBAC data role)
@@ -511,14 +514,14 @@ vm:
 
 resources:
   cosmos:
-    enabled: false        # keyless via the VM's managed identity — NO env vars injected
+    enabled: false        # keyless (MI RBAC); endpoints written to /etc/amplifier-online/resources.env
   redis:
     enabled: false
   storage:
     enabled: false
   cognitive-services:
     enabled: false
-  # postgres is NOT supported on the vm stack
+  # postgres is not yet supported on the vm stack (deferred)
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -613,7 +616,7 @@ resources:
 | SSH | Key auth only (`ssh_public_key`). No public SSH — manage via `az vm run-command` |
 | Networking | No public IP. Default-deny NSG; only listed `ports` allowed, from `source` (`cae-infra`/`vnet`/CIDR) |
 | Data disk | Optional `data_disk_gib` (0 = none); persists across `up` re-runs |
-| Resources | Supports: cosmos, redis, storage, cognitive-services (RBAC via MI, **no env-var injection**). **No postgres.** |
+| Resources | Supports: cosmos, redis, storage, cognitive-services (keyless MI RBAC; endpoints written to `/etc/amplifier-online/resources.env`, refreshed on `up`). **Postgres not yet supported (deferred).** |
 | Auth | None — no EasyAuth, no login client, no JWT middleware, no App Insights |
 
 ---
@@ -626,11 +629,12 @@ When your containers deploy, Amplifier Online **automatically injects environmen
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
 
-> **The `vm` stack receives NONE of the variables below.** Env-var injection is a container
-> mechanism; a VM only gets its cloud-init document. The VM's managed identity is granted the same
-> keyless RBAC (Cosmos/Redis/Storage/Cognitive Services), but the software must discover endpoints
-> itself and authenticate via `DefaultAzureCredential`/IMDS. There is no App Insights and no auth
-> injection on `vm`.
+> **The `vm` stack does not inject these as container env vars** — it has no containers. Instead, the
+> resource-connection variables (Cosmos/Redis/Storage/Cognitive Services, same names as below) are
+> written to **`/etc/amplifier-online/resources.env`** on the VM by a Run Command, refreshed on every
+> `up`; source that file at service start and authenticate via `DefaultAzureCredential`/IMDS. There
+> is **no App Insights and no auth injection** on `vm`, and **Postgres is not yet supported**
+> (deferred).
 
 ### Injected When Auth Is Configured (any service or frontend has auth enabled)
 
@@ -878,5 +882,5 @@ Before running `amplifier-online up`, verify:
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`
 - [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)
 - [ ] Resource flags (`enabled: true/false`) are intentional
-- [ ] For `vm`: `vm.ssh_public_key` is the PUBLIC key, `vm.cloud_init` points to an existing file, and `resources.postgres` is NOT set (unsupported)
+- [ ] For `vm`: `vm.ssh_public_key` is the PUBLIC key, `vm.cloud_init` points to an existing file, and `resources.postgres` is NOT set (not yet supported on `vm`)
 - [ ] Global config (`~/.amplifier-online/config.yaml`) matches the target environment's `acr_name`

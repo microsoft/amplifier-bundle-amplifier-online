@@ -31,10 +31,11 @@ Match your application's architecture to a stack using these criteria:
 | JWT middleware (API token validation) | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Service-to-service auth (managed identity) | ✅ | ✅ | ❌ | ❌ | ✅ |
 
-> ⚠️ **`vm` managed databases:** keyless Cosmos, Redis, Storage, and Cognitive Services only —
-> **no Postgres** (it uses password auth, not managed identity). `vm` is the escape hatch for
-> software that doesn't fit the managed-PaaS backing services; it installs via cloud-init, not a
-> container image, so most of the container/frontend criteria above are ❌ by design.
+> ⚠️ **`vm` managed databases:** keyless Cosmos, Redis, Storage, and Cognitive Services (endpoints
+> written to `/etc/amplifier-online/resources.env` on the VM) — **Postgres not yet supported**
+> (deferred). `vm` is the escape hatch for software that doesn't fit the managed-PaaS backing
+> services; it installs via cloud-init, not a container image, so most of the container/frontend
+> criteria above are ❌ by design.
 
 **All five stacks are production-ready and available now.**
 
@@ -661,7 +662,8 @@ managed-PaaS backing services (e.g. a graph database like Neo4j). Unlike every o
   Reachable over private IPs by resources in the VNet (notably ACA-deployed apps); it reaches
   platform backing services over their public endpoints.
 - **System-assigned managed identity** — can be granted the same keyless access to shared resources
-  (Cosmos, Redis, Storage, Cognitive Services) that ACA apps get.
+  (Cosmos, Redis, Storage, Cognitive Services) that ACA apps get. Their connection endpoints are
+  written to `/etc/amplifier-online/resources.env` on the VM (by a Run Command, refreshed on `up`).
 - **Default-deny NSG** — only the inbound ports you list are allowed, and only from the source you
   specify.
 - **Optional persistent data disk** — survives VM config changes and re-runs of `up`.
@@ -681,8 +683,8 @@ managed-PaaS backing services (e.g. a graph database like Neo4j). Unlike every o
 - Public ingress — the VM has no public IP; no EasyAuth, no login client, no JWT middleware.
 - Container images / `deploy_image` — the `services:` map does not apply; software installs via
   cloud-init.
-- **PostgreSQL** — the shared Postgres uses password auth, not managed identity. Use Cosmos, or
-  fetch a secret from Key Vault yourself.
+- **PostgreSQL (not yet)** — deferred on the `vm` stack (Postgres carries a secret; delivery to the
+  VM is still TBD). Use Cosmos, or fetch a secret from Key Vault yourself.
 - Resolution of **internal** (`external: false`) ACA app names (v1) — external-ingress CAEs have no
   private DNS zone to link, so the VM can't resolve `*.internal.<domain>`. Reach internal apps by
   IP, or make them external.
@@ -725,7 +727,7 @@ resources:                     # optional keyless access, granted to the VM's ma
   redis: { enabled: false }
   storage: { enabled: false }
   cognitive-services: { enabled: false }
-  # postgres is NOT supported on vm
+  # postgres is not yet supported on vm (deferred)
 ```
 
 **Key concepts:**
@@ -736,8 +738,11 @@ resources:                     # optional keyless access, granted to the VM's ma
   supply a CIDR. Set `static_private_ip` to a free address in `10.100.4.0/24` for a stable
   connection string (a dynamic IP is stable as long as the VM isn't deallocated).
 - **Managed identity & resources:** enabling a resource grants the VM's identity keyless access and
-  (for Cosmos) creates this project's database — identical to the ACA stacks. Injected env-var names
-  match the ACA stacks (see `manifest-schema.md`); **Postgres is unavailable**.
+  (for Cosmos) creates this project's database — identical to the ACA stacks. The connection
+  variables use the **same names** the ACA stacks inject, but are written to
+  **`/etc/amplifier-online/resources.env`** on the VM (by a Run Command, refreshed on every `up`)
+  rather than injected as container env vars — source that file at service start. **Postgres is not
+  yet supported** (deferred).
 
 | Resource | Grant |
 |----------|-------|

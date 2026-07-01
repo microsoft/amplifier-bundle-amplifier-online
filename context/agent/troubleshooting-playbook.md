@@ -1007,25 +1007,34 @@ direction — an ACA app reaching the VM — works over the VM's private IP; see
 
 ---
 
-## Failure Mode 35: vm — Postgres Unsupported / Resource Env Vars Missing
+## Failure Mode 35: vm — `resources.env` Missing/Stale, or Postgres Rejected
 
 **Applies to:** `vm` stack.
 
-**Symptom:** A `vm` manifest with `resources.postgres` fails or is ignored, or software on the VM
-expects `COSMOS_ENDPOINT` / `DB_*` / `REDIS_HOST` env vars that aren't present.
+**Symptom:** Software on the VM can't find `/etc/amplifier-online/resources.env` (or it's missing an
+endpoint like `COSMOS_ENDPOINT`/`REDIS_HOST`), or `amplifier-online up` now **rejects** a `vm`
+manifest that lists `resources.postgres`.
 
-**Root cause:** Two vm-specific facts:
-1. **Postgres is not supported on `vm`** — it uses password auth, not managed identity. Only
+**Root cause:**
+1. **Postgres is not yet supported on `vm`** (deferred — it carries a secret). Per-stack validation
+   now rejects `resources.postgres` on `vm` with a clear error instead of silently dropping it. Only
    `cosmos`, `redis`, `storage`, and `cognitive-services` are available.
-2. **No env-var injection.** On a VM, resource access is RBAC-only on the VM's managed identity; the
-   container env-injection mechanism does not apply. The VM only receives its cloud-init document.
+2. **`resources.env` timing.** Enabled keyless resources are written to
+   `/etc/amplifier-online/resources.env` by a **Run Command** — it lands **shortly after boot**, not
+   at cloud-init parse time. Software that reads it inline during cloud-init can race ahead of it.
+3. **First-run / stale file.** The file is (re)written on every `up` whose resource set changed. If
+   you enabled a resource but haven't re-run `up`, or you're on an old VM provisioned before this
+   feature, the file won't reflect the change until the next `up`.
 
 **Fix:**
-- Remove `resources.postgres` from a `vm` manifest. If you need a relational store, use Cosmos, or
-  fetch a Key Vault secret yourself.
-- Configure resource endpoints in cloud-init (the shared resource names are fixed) and authenticate
-  with `DefaultAzureCredential`/IMDS. Do **not** expect `COSMOS_ENDPOINT`, `DB_*`, `REDIS_HOST`,
-  etc. to be injected — that is a container-stack behavior.
+- Remove `resources.postgres` from a `vm` manifest (use Cosmos, or fetch a Key Vault secret
+  yourself). Postgres-on-vm is a roadmap item.
+- **Source `/etc/amplifier-online/resources.env` at service start** (a systemd unit or `runcmd`
+  step), not inline at cloud-init parse time. Authenticate to the resource with
+  `DefaultAzureCredential`/IMDS — the file provides endpoints, not keys.
+- If the file is missing/stale after enabling a resource, **re-run `amplifier-online up`** (the Run
+  Command refreshes it). Verify with
+  `az vm run-command invoke -g ao-<project>-rg -n <project>-vm --command-id RunShellScript --scripts "cat /etc/amplifier-online/resources.env"`.
 
 ---
 
