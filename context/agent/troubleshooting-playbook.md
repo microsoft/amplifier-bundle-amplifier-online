@@ -968,6 +968,67 @@ section in `stacks-reference.md` for the JWT + `azp`-whitelist layer.)
 
 ---
 
+## Failure Mode 33: vm Unreachable From an ACA App (NSG / Networking)
+
+**Applies to:** `vm` stack.
+
+**Symptom:** An ACA app (or other VNet resource) gets connection-refused or a timeout connecting to
+the VM's private IP/port.
+
+**Root cause / checklist:** The VM has **no public IP** and a **default-deny NSG** — only the
+inbound `ports` you declared are open, and only from the declared `source`. Verify:
+1. The target `port` is listed in `vm.ports` in the manifest (all other inbound is denied).
+2. The rule's `source` covers the caller. ACA app egress comes from the CAE app subnet — use
+   `source: cae-infra` (`10.100.0.0/23`). `vnet` opens the whole VNet; a CIDR must include the caller.
+3. The caller uses the VM's **private IP** (printed on `up`, or `az vm list-ip-addresses`). A dynamic
+   IP can change if the VM is deallocated — set `vm.static_private_ip` for stability.
+4. The software is actually listening and bound to `0.0.0.0` (not `127.0.0.1`):
+   ```bash
+   az vm run-command invoke -g ao-<project>-rg -n <project>-vm \
+     --command-id RunShellScript --scripts "ss -tlnp"
+   ```
+
+After changing `vm.ports`, re-run `amplifier-online up`.
+
+---
+
+## Failure Mode 34: vm Can't Resolve an Internal (`external: false`) ACA App Name
+
+**Applies to:** `vm` stack (v1 limitation).
+
+**Symptom:** Software on the VM fails to resolve an internal ACA app FQDN
+(`<app>.internal.<domain>`), while external app FQDNs resolve fine.
+
+**Root cause:** External-ingress CAEs have no private DNS zone to link, so the VM resolves external
+app FQDNs publicly but **cannot resolve `*.internal.<domain>`** names.
+
+**Fix:** Reach the internal app **by IP**, or make it **external** (`external: true`). (The reverse
+direction — an ACA app reaching the VM — works over the VM's private IP; see Failure Mode 33.)
+
+---
+
+## Failure Mode 35: vm — Postgres Unsupported / Resource Env Vars Missing
+
+**Applies to:** `vm` stack.
+
+**Symptom:** A `vm` manifest with `resources.postgres` fails or is ignored, or software on the VM
+expects `COSMOS_ENDPOINT` / `DB_*` / `REDIS_HOST` env vars that aren't present.
+
+**Root cause:** Two vm-specific facts:
+1. **Postgres is not supported on `vm`** — it uses password auth, not managed identity. Only
+   `cosmos`, `redis`, `storage`, and `cognitive-services` are available.
+2. **No env-var injection.** On a VM, resource access is RBAC-only on the VM's managed identity; the
+   container env-injection mechanism does not apply. The VM only receives its cloud-init document.
+
+**Fix:**
+- Remove `resources.postgres` from a `vm` manifest. If you need a relational store, use Cosmos, or
+  fetch a Key Vault secret yourself.
+- Configure resource endpoints in cloud-init (the shared resource names are fixed) and authenticate
+  with `DefaultAzureCredential`/IMDS. Do **not** expect `COSMOS_ENDPOINT`, `DB_*`, `REDIS_HOST`,
+  etc. to be injected — that is a container-stack behavior.
+
+---
+
 ## AADSTS Error Code → Cause Quick Table
 
 When the only signal is an `AADSTS` code in the browser console or CLI output:

@@ -15,22 +15,28 @@ destroy a specific type of workload.
 
 Match your application's architecture to a stack using these criteria:
 
-| Criteria | `web-app-aca` | `internal-service-aca` | `web-app-awa` | `static-web-app` |
-|----------|:---:|:---:|:---:|:---:|
-| Multi-container backend + frontend | ✅ | ❌ | ❌ | ❌ |
-| Internal-only backend (no public ingress) | ❌ | ✅ | ❌ | ❌ |
-| Single backend container + static frontend | ❌ | ❌ | ✅ | ❌ |
-| Pure static site (no backend) | ❌ | ❌ | ❌ | ✅ |
-| Persistent volumes | ✅ | ✅ | ✅ | ❌ |
-| Needs managed databases | ✅ | ✅ | ✅ | ❌ |
-| Container-to-container networking | ✅ | ✅ | ❌ | ❌ |
-| GitHub-integrated CI/CD for frontend | ⚠️ | ❌ | ✅ | ✅ |
-| PR preview deployments | ⚠️ | ❌ | ✅ | ✅ |
-| Entra ID auth (EasyAuth on frontends) | ✅ | ❌ | ✅ | ✅ |
-| JWT middleware (API token validation) | ✅ | ✅ | ✅ | ❌ |
-| Service-to-service auth (managed identity) | ✅ | ✅ | ❌ | ❌ |
+| Criteria | `web-app-aca` | `internal-service-aca` | `web-app-awa` | `static-web-app` | `vm` |
+|----------|:---:|:---:|:---:|:---:|:---:|
+| Multi-container backend + frontend | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Internal-only backend (no public ingress) | ❌ | ✅ | ❌ | ❌ | ✅ |
+| Single backend container + static frontend | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Pure static site (no backend) | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Non-containerized / arbitrary software (e.g. Neo4j) | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Persistent volumes / disk | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Needs managed databases | ✅ | ✅ | ✅ | ❌ | ⚠️ |
+| Container-to-container networking | ✅ | ✅ | ❌ | ❌ | ❌ |
+| GitHub-integrated CI/CD for frontend | ⚠️ | ❌ | ✅ | ✅ | ❌ |
+| PR preview deployments | ⚠️ | ❌ | ✅ | ✅ | ❌ |
+| Entra ID auth (EasyAuth on frontends) | ✅ | ❌ | ✅ | ✅ | ❌ |
+| JWT middleware (API token validation) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Service-to-service auth (managed identity) | ✅ | ✅ | ❌ | ❌ | ✅ |
 
-**All four stacks are production-ready and available now.**
+> ⚠️ **`vm` managed databases:** keyless Cosmos, Redis, Storage, and Cognitive Services only —
+> **no Postgres** (it uses password auth, not managed identity). `vm` is the escape hatch for
+> software that doesn't fit the managed-PaaS backing services; it installs via cloud-init, not a
+> container image, so most of the container/frontend criteria above are ❌ by design.
+
+**All five stacks are production-ready and available now.**
 
 **How to see what's available:**
 ```bash
@@ -52,6 +58,9 @@ Available deployment stacks:
 
   static-web-app
     Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
+
+  vm
+    Private Linux VM in the platform VNet (no public IP) with a system-assigned managed identity, cloud-init setup, and optional keyless access to Cosmos, Redis, Storage, and Cognitive Services
 ```
 
 ---
@@ -635,6 +644,124 @@ presence of `scp`) alongside the existing MI path.
 
 For the roles-vs-groups authorization model and the 200-group overage caveat, see
 `authorization-guide.md`.
+
+---
+
+## Stack: `vm`
+
+**Full name:** Private Linux Virtual Machine
+
+A private Linux VM in the platform VNet — the escape hatch for software that doesn't fit the
+managed-PaaS backing services (e.g. a graph database like Neo4j). Unlike every other stack there is
+**no container-image model**: software is installed via **cloud-init** on first boot.
+
+### What it provisions
+
+- **A single Linux VM** in the shared `vms` subnet of the platform VNet — **no public IP**.
+  Reachable over private IPs by resources in the VNet (notably ACA-deployed apps); it reaches
+  platform backing services over their public endpoints.
+- **System-assigned managed identity** — can be granted the same keyless access to shared resources
+  (Cosmos, Redis, Storage, Cognitive Services) that ACA apps get.
+- **Default-deny NSG** — only the inbound ports you list are allowed, and only from the source you
+  specify.
+- **Optional persistent data disk** — survives VM config changes and re-runs of `up`.
+- **Cloud-init first-boot setup** — the CLI reads your cloud-init file and uploads it; the VM runs
+  it on first boot.
+- OS image defaults to **Ubuntu 24.04 LTS** (overridable via `vm.image`).
+
+### Best for
+
+- Software with no managed-PaaS equivalent on the platform — graph databases (Neo4j), custom
+  daemons, anything that needs a real OS.
+- A private backing service consumed by ACA apps over the VNet.
+- Workloads that need a persistent disk and a stable private IP.
+
+### What this stack does NOT support
+
+- Public ingress — the VM has no public IP; no EasyAuth, no login client, no JWT middleware.
+- Container images / `deploy_image` — the `services:` map does not apply; software installs via
+  cloud-init.
+- **PostgreSQL** — the shared Postgres uses password auth, not managed identity. Use Cosmos, or
+  fetch a secret from Key Vault yourself.
+- Resolution of **internal** (`external: false`) ACA app names (v1) — external-ingress CAEs have no
+  private DNS zone to link, so the VM can't resolve `*.internal.<domain>`. Reach internal apps by
+  IP, or make them external.
+
+### Repo prerequisites
+
+There is no Dockerfile and no ACR image. Before `amplifier-online up`:
+
+1. **An SSH keypair** — VMs use SSH **key** auth only (no passwords). Generate one
+   (`ssh-keygen -t ed25519 -f ./ao-vm-key`) and paste the **public** half into `vm.ssh_public_key`.
+2. **A cloud-init document** — `vm.cloud_init` points at a cloud-init file (relative to
+   `amplifier-online.yaml`). The CLI reads its contents and uploads them; the VM runs it on first
+   boot to install and configure your software.
+
+### Stack-specific manifest fields
+
+```yaml
+name: my-project
+stack: vm                      # ← must exactly match this string
+
+vm:
+  size: Standard_D2as_v5       # VM SKU
+  admin_username: azureuser
+  ssh_public_key: "ssh-ed25519 AAAA..."   # PUBLIC half of the keypair (key auth only)
+  cloud_init: ./cloud-init.yaml            # path relative to this file; CLI uploads its contents
+  data_disk_gib: 64            # optional persistent data disk (0 = none)
+  static_private_ip: ""        # optional fixed IP in 10.100.4.0/24 ("" = dynamic)
+  ports:
+    - port: 7687               # inbound allow-rule (all other VNet inbound denied)
+      protocol: Tcp
+      source: cae-infra        # token (cae-infra | vnet) or a CIDR
+  # image:                     # optional; defaults to Ubuntu 24.04 LTS
+  #   publisher: canonical
+  #   offer: ubuntu-24_04-lts
+  #   sku: server
+  #   version: latest
+
+resources:                     # optional keyless access, granted to the VM's managed identity
+  cosmos: { enabled: false }
+  redis: { enabled: false }
+  storage: { enabled: false }
+  cognitive-services: { enabled: false }
+  # postgres is NOT supported on vm
+```
+
+**Key concepts:**
+- **No `services:` and no images.** The `vm:` block replaces the container model.
+  `amplifier-online init --stack vm` scaffolds it.
+- **Networking:** no public IP; NSG is default-deny. `source: cae-infra` resolves to the CAE app
+  subnet (`10.100.0.0/23`) — where ACA app egress originates. `vnet` is the whole VNet; otherwise
+  supply a CIDR. Set `static_private_ip` to a free address in `10.100.4.0/24` for a stable
+  connection string (a dynamic IP is stable as long as the VM isn't deallocated).
+- **Managed identity & resources:** enabling a resource grants the VM's identity keyless access and
+  (for Cosmos) creates this project's database — identical to the ACA stacks. Injected env-var names
+  match the ACA stacks (see `manifest-schema.md`); **Postgres is unavailable**.
+
+| Resource | Grant |
+|----------|-------|
+| `cosmos` | Cosmos DB Data Contributor + a per-project SQL database |
+| `redis` | Azure Managed Redis `default` access policy (keyless) |
+| `storage` | Storage Blob Data Contributor + a per-project container |
+| `cognitive-services` | Cognitive Services User on the shared keyless AI account |
+
+### Operating the VM
+
+There is **no public SSH.** Manage the VM via Azure Run Command (no inbound port, runs as root):
+
+```bash
+az vm run-command invoke -g ao-my-project-rg -n my-project-vm \
+  --command-id RunShellScript --scripts "systemctl status neo4j"
+```
+
+For interactive SSH, a platform admin can deploy **Azure Bastion** (off by default — it carries a
+standing cost; the `AzureBastionSubnet` is already reserved).
+
+`amplifier-online up` is **idempotent** — re-running updates the VM in place and preserves the data
+disk. `deploy_image` does **not** apply to VMs; to change software, update cloud-init and re-run
+`up`, or use Run Command. `amplifier-online destroy` removes the VM, NIC, NSG, and data disk with the
+project resource group; shared sub-resources (Cosmos DB, Storage container) are cleaned up too.
 
 ---
 

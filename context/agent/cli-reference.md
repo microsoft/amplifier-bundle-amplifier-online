@@ -121,6 +121,9 @@ Available deployment stacks:
 
   static-web-app
     Azure Static Web App with GitHub integration for pure static websites (no backend, no database - just static content)
+
+  vm
+    Private Linux VM in the platform VNet (no public IP) with a system-assigned managed identity, cloud-init setup, and optional keyless access to Cosmos, Redis, Storage, and Cognitive Services
 ```
 
 ---
@@ -149,7 +152,14 @@ template. Requires global config (`amplifier-online config`) to exist first.
 amplifier-online init                      # Interactive: prompts for stack (if multiple) and project name
 amplifier-online init --stack web-app-aca          # Non-interactive: specify stack directly
 amplifier-online init --stack internal-service-aca  # Internal-only Container App (no public ingress)
+amplifier-online init --stack vm                    # Private Linux VM (cloud-init, no container image)
 ```
+
+**`vm` stack scaffolds differently:** it writes a `vm:` block (VM size, `ssh_public_key`,
+`cloud_init` path, `ports`, optional `data_disk_gib`) instead of `services:`, and you supply a
+`cloud-init.yaml` next to the manifest to install your software on first boot. There is no
+Dockerfile and no ACR image to build/push. See the vm sections in `stacks-reference.md` and
+`manifest-schema.md`.
 
 **Interactive flow:**
 1. If one stack → auto-selects it
@@ -188,6 +198,14 @@ amplifier-online up --dry-run  # Preview what would happen without making change
 - Images in manifest reference ACR (`<acr-name>.azurecr.io/...` format)
 
 **Always suggest `--dry-run` first** when a user is about to run `up` for the first time.
+
+**`vm` stack:** `up` skips all of the above auth/registration/EasyAuth steps (a VM has no login
+client, `-api`, or redirect URIs) and simply deploys the VM Bicep. The CLI **inlines your
+`vm.cloud_init` file** into the deployment at `up` time, and prints the VM's **private IP** on
+success. There are no images to build or push. `up` is idempotent — re-running updates the VM in
+place and **preserves the data disk**. To change installed software, update cloud-init and re-run
+`up`, or use `az vm run-command` (there is no public SSH; see the vm section in
+`stacks-reference.md`).
 
 ---
 

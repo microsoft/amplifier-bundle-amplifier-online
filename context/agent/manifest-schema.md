@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, `frontend`, `auth`, and `resources`.
+> `services`, `frontend`, `vm`, `auth`, and `resources`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -21,7 +21,7 @@ then edited by the developer.
 ```yaml
 # Required fields
 name: <project-name>          # Unique project identifier (URL-safe, lowercase, hyphens)
-stack: <stack-name>           # Which stack to deploy with (web-app-aca, internal-service-aca, web-app-awa, or static-web-app)
+stack: <stack-name>           # Which stack to deploy with (web-app-aca, internal-service-aca, web-app-awa, static-web-app, or vm)
 
 # Services map (required for web-app-aca, internal-service-aca, and web-app-awa; at least one service)
 # Keys are service names — any name works (e.g., api, web, worker)
@@ -51,6 +51,24 @@ frontend:
   build_command: <command>
   api_location: <path>           # Optional: serverless functions directory (static-web-app only)
   protected: login               # Always 'login' — SWA frontends always require sign-in
+
+# VM config (required for and ONLY valid on the vm stack — replaces services/frontend)
+vm:
+  size: <vm-sku>                 # Azure VM SKU (e.g. Standard_D2as_v5)
+  admin_username: <name>         # Linux admin user (e.g. azureuser)
+  ssh_public_key: <ssh-key>      # PUBLIC half of an SSH keypair — key auth only, no passwords
+  cloud_init: <path>             # Path (relative to this file) to a cloud-init doc; CLI uploads its contents
+  data_disk_gib: <integer>       # Optional persistent data disk in GiB (0 = none)
+  static_private_ip: <ip>        # Optional fixed IP in 10.100.4.0/24 ("" = dynamic)
+  ports:                         # Inbound NSG allow-rules (all other VNet inbound denied; no public ingress)
+    - port: <port-number>
+      protocol: <Tcp|Udp>
+      source: <cae-infra|vnet|CIDR>  # cae-infra = CAE app subnet; vnet = whole VNet; or a CIDR
+  image:                         # Optional OS image (defaults to Ubuntu 24.04 LTS)
+    publisher: <publisher>
+    offer: <offer>
+    sku: <sku>
+    version: <version>
 
 # Optional: cross-project / bring-your-own auth registrations (all fields optional)
 auth:
@@ -122,11 +140,12 @@ errors, warnings, or blockers. Flagging any of these is a **false positive**.
 
 ### `stack`
 - **Required.** Must exactly match a stack name returned by `amplifier-online stack list`.
-- Current valid values: `web-app-aca`, `internal-service-aca`, `web-app-awa`, `static-web-app`
+- Current valid values: `web-app-aca`, `internal-service-aca`, `web-app-awa`, `static-web-app`, `vm`
 - ❌ `web_app_aca`, `webappaca`, `aca` — all fail with "unknown stack" error
 
 ### `services`
 - **Required for:** `web-app-aca`, `internal-service-aca`, and `web-app-awa`
+- **Not used by:** `static-web-app` (uses `frontend`) or `vm` (uses `vm`)
 - A named map of services. Keys are service names (any name works: `api`, `web`, `worker`, etc.).
 - Each service must have `image` and `port`.
 - At least one service is required.
@@ -254,6 +273,32 @@ appropriate because only one process ever writes.
 - A frontend always gets a `-client` login registration; `AZURE_CLIENT_ID` is injected for MSAL.js.
 - Setting `protected: false` on a frontend is deprecated and will be rejected in a future release.
 
+### `vm` (vm stack only)
+- **Required for and only valid on the `vm` stack.** Replaces `services`/`frontend` — a VM has no
+  container image. Scaffold with `amplifier-online init --stack vm`.
+- `size` — Azure VM SKU (e.g. `Standard_D2as_v5`).
+- `admin_username` — Linux admin user (e.g. `azureuser`).
+- `ssh_public_key` — the **public** half of an SSH keypair. VMs use **key auth only** (no
+  passwords). There is no public SSH anyway — manage the VM with `az vm run-command` (see the vm
+  section in `stacks-reference.md`).
+- `cloud_init` — path (relative to `amplifier-online.yaml`) to a cloud-init document. The CLI reads
+  its **contents** and uploads them; the VM runs it on first boot to install/configure software.
+  (The CLI inlines the file at `up` time; the raw path is not what reaches the VM.)
+- `data_disk_gib` — optional persistent data disk in GiB (`0` = none). Survives VM config changes
+  and re-runs of `up`.
+- `static_private_ip` — optional fixed private IP in `10.100.4.0/24` (`""` = dynamic). Use it for a
+  stable connection string.
+- `ports` — inbound NSG allow-rules. **Default-deny:** only listed ports are allowed, only from the
+  given `source`. `source` is a token (`cae-infra` = the CAE app subnet `10.100.0.0/23` where ACA
+  egress originates; `vnet` = the whole VNet) or a CIDR. There is **no public ingress** regardless.
+- `image` — optional OS image block (`publisher`/`offer`/`sku`/`version`); defaults to Ubuntu
+  24.04 LTS.
+- **No Postgres.** The `vm` stack supports `cosmos`, `redis`, `storage`, and `cognitive-services`
+  only (see `resources` below). Resource access is **RBAC-only via the VM's managed identity — no
+  env vars are injected** (unlike container stacks). Software on the VM authenticates with
+  `DefaultAzureCredential`/IMDS and must be told the shared resource endpoints itself (e.g. via
+  cloud-init).
+
 ### `auth` (top-level — registration model)
 
 Registrations are named by OAuth role, not one per project:
@@ -274,10 +319,15 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 
 ### `resources`
 - **Optional** (all disabled by default).
-- **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, and `web-app-awa`)
+- **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, `web-app-awa`, and `vm`)
+- **`vm` caveat:** supports `cosmos`, `redis`, `storage`, and `cognitive-services` **but NOT
+  `postgres`** (Postgres uses password auth, not managed identity). On `vm`, access is granted as
+  RBAC on the VM's managed identity — **the connection env vars below are NOT injected** (that
+  mechanism is container-only); the VM authenticates via `DefaultAzureCredential`/IMDS.
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
 - **postgres**: Adds a database and user on the shared PostgreSQL server; injected as
-  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`)
+  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`). *(Not available on
+  the `vm` stack.)*
 - **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE` —
   no key, access is keyless via the container's managed identity (RBAC data role)
 - **redis**: Grants keyless access to the shared Azure Managed Redis cache; injected as
@@ -441,6 +491,36 @@ resources:
     enabled: false
 ```
 
+### Stack: vm (private Linux VM, e.g. Neo4j)
+
+```yaml
+name: my-project
+stack: vm
+
+vm:
+  size: Standard_D2as_v5
+  admin_username: azureuser
+  ssh_public_key: "ssh-ed25519 AAAA..."   # public half only
+  cloud_init: ./cloud-init.yaml            # installs software on first boot
+  data_disk_gib: 64
+  static_private_ip: ""
+  ports:
+    - port: 7687          # e.g. Neo4j Bolt
+      protocol: Tcp
+      source: cae-infra   # reachable from ACA apps' egress subnet
+
+resources:
+  cosmos:
+    enabled: false        # keyless via the VM's managed identity — NO env vars injected
+  redis:
+    enabled: false
+  storage:
+    enabled: false
+  cognitive-services:
+    enabled: false
+  # postgres is NOT supported on the vm stack
+```
+
 ### Minimal: API only (web-app-aca, single service)
 
 ```yaml
@@ -524,6 +604,18 @@ resources:
 | GitHub repo | Frontend code must be in GitHub |
 | Serverless API | Optional via `api_location` field |
 
+### `vm`
+
+| Requirement | Rule |
+|-------------|------|
+| `vm` block | Required: `size`, `admin_username`, `ssh_public_key`, `cloud_init`. No `services`/`frontend`. |
+| Image/source | No Dockerfile, no ACR image — software installs via cloud-init on first boot |
+| SSH | Key auth only (`ssh_public_key`). No public SSH — manage via `az vm run-command` |
+| Networking | No public IP. Default-deny NSG; only listed `ports` allowed, from `source` (`cae-infra`/`vnet`/CIDR) |
+| Data disk | Optional `data_disk_gib` (0 = none); persists across `up` re-runs |
+| Resources | Supports: cosmos, redis, storage, cognitive-services (RBAC via MI, **no env-var injection**). **No postgres.** |
+| Auth | None — no EasyAuth, no login client, no JWT middleware, no App Insights |
+
 ---
 
 ---
@@ -533,6 +625,12 @@ resources:
 When your containers deploy, Amplifier Online **automatically injects environment variables** based
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
+
+> **The `vm` stack receives NONE of the variables below.** Env-var injection is a container
+> mechanism; a VM only gets its cloud-init document. The VM's managed identity is granted the same
+> keyless RBAC (Cosmos/Redis/Storage/Cognitive Services), but the software must discover endpoints
+> itself and authenticate via `DefaultAzureCredential`/IMDS. There is no App Insights and no auth
+> injection on `vm`.
 
 ### Injected When Auth Is Configured (any service or frontend has auth enabled)
 
@@ -780,4 +878,5 @@ Before running `amplifier-online up`, verify:
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`
 - [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)
 - [ ] Resource flags (`enabled: true/false`) are intentional
+- [ ] For `vm`: `vm.ssh_public_key` is the PUBLIC key, `vm.cloud_init` points to an existing file, and `resources.postgres` is NOT set (unsupported)
 - [ ] Global config (`~/.amplifier-online/config.yaml`) matches the target environment's `acr_name`

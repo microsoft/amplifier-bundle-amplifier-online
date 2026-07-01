@@ -641,7 +641,8 @@ stages:
           STEP 1: Find or create the AGENTS.md file
             Check for an existing AGENTS.md at the project root ({{project_dir}}/AGENTS.md).
             If not found, check {{project_dir}}/.amplifier/AGENTS.md.
-            If neither exists, create {{project_dir}}/.amplifier/AGENTS.md.
+            If neither exists, create {{project_dir}}/AGENTS.md (at the project root, next to
+            CLAUDE.md — not in .amplifier/).
 
           STEP 2: Read the existing file content (if any)
             If the file already contains an "Amplifier Online" section (or similar deployment
@@ -670,7 +671,7 @@ stages:
           STEP 4: Commit the change
             Stage the file and commit with an appropriate message, e.g.:
             ```bash
-            git add AGENTS.md .amplifier/AGENTS.md
+            git add AGENTS.md
             git commit -m "docs: add Amplifier Online deployment context to AGENTS.md"
             ```
         output: "context_write_status"
