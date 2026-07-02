@@ -1078,7 +1078,7 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS9002326` | SPA redirect URI registered under **Web** platform; MSAL needs **SPA** type | Failure Mode 29 |
 | `AADSTS900144` | Empty/missing `client_id` — a build-time var was not baked into the bundle | Build-Time Config Inlining (below) |
 | `AADSTS700016` | Application not found for the client id — stale/wrong client id in config or GitHub vars | Failure Mode 17 |
-| `AADSTS7002381` | GitHub OIDC token missing `enterprise` claim (non-enterprise repo) | Failure Mode 19 |
+| `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `cicd create` | Failure Mode 19 |
 | `AADSTS50105` | User not assigned to a role; or nested/mail-enabled group | Failure Mode 9, Failure Mode 30 |
 | `AADSTS53000` | Conditional Access — device not compliant/managed | Sign in from a compliant device |
 

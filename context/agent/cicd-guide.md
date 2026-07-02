@@ -37,9 +37,9 @@ push to main (path filter)          ┌─────────────�
   provisioner authenticates the token and authorizes the deploy against resource-group tags — there
   is **no long-lived Azure credential in GitHub at all** for container stacks.
 
-Why this shape: the Microsoft tenant blocks client secrets, and per-repo Entra federated credentials
-were fragile (they required the repo to live in a tenant-linked GitHub Enterprise org). Trusting
-GitHub's OIDC directly at the provisioner removes both the secret and the federation requirement.
+Why this shape: the Microsoft tenant blocks client secrets. Having the provisioner validate GitHub's
+OIDC token directly means the project repo needs no stored Azure credential and deploys from any
+GitHub org — personal or enterprise.
 
 ---
 
