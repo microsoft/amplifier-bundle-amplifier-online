@@ -1,60 +1,60 @@
 # Amplifier Online CI/CD Guide
 
-The `amplifier-online cicd create` command generates GitHub Actions workflow files that
-automate the build → push → deploy cycle for your containers and/or static sites.
+`amplifier-online cicd create` generates GitHub Actions workflow files that automate the
+build → push → deploy cycle for your containers and/or static sites.
+
+> **Container CI/CD is push-to-deploy, not `az`-based.** Container and Web-App stacks do **not**
+> run `az acr login` / `az containerapp update` and do **not** need `AZURE_CLIENT_ID` /
+> `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets or an Entra federated credential. The workflow
+> builds and pushes the image to **GitHub Container Registry (ghcr.io)**, then calls the
+> **provisioner service** over HTTPS, authenticating with a **GitHub Actions OIDC token**. The
+> provisioner validates the token, imports the image into ACR, and rolls the deployment. Only
+> **Static Web App** frontends use a stored secret (`AZURE_STATIC_WEB_APPS_API_TOKEN`).
+
+---
+
+## How Container CI/CD Works
+
+```
+push to main (path filter)          ┌──────────────────────────────────────────┐
+        │                           │            Provisioner service             │
+        ▼                           │                                            │
+┌───────────────┐  build job        │  1. Validate GitHub OIDC token             │
+│ GitHub Actions │  ───────────────▶ │     (JWKS sig, issuer, aud, exp)           │
+│                │  push image to    │  2. Authorize: OIDC claims vs RG tags      │
+│  build + push  │  ghcr.io          │     repository_id == ao-deploy-repo-id     │
+│  ───────────▶  │                   │     ref/environment == ao-deploy-ref/-env  │
+│  deploy job    │  OIDC token +     │  3. Import ghcr.io image → ACR             │
+│  POST /deploy ─┼──────────────────▶│  4. stack.deploy_image (roll revision)     │
+└───────────────┘  Bearer $OIDC      └──────────────────────────────────────────┘
+```
+
+- **Build** (`build` job): log in to `ghcr.io` with the built-in `GITHUB_TOKEN`, build and push
+  `:<sha>` + `:latest`, scan with **Trivy** (fails on CRITICAL/HIGH), generate an **SBOM**, and
+  **attest build provenance**. No Azure credentials are used here.
+- **Deploy** (`deploy` job, `environment: production`): mint a GitHub OIDC token for the
+  provisioner's audience, then `POST` the image reference + manifest to the provisioner. The
+  provisioner authenticates the token and authorizes the deploy against resource-group tags — there
+  is **no long-lived Azure credential in GitHub at all** for container stacks.
+
+Why this shape: the Microsoft tenant blocks client secrets. Having the provisioner validate GitHub's
+OIDC token directly means the project repo needs no stored Azure credential and deploys from any
+GitHub org — personal or enterprise.
 
 ---
 
 ## What It Generates
 
-Generated workflows depend on which stack you're using:
+Generated workflows depend on the stack:
 
-### For `web-app-aca` (Container Apps)
+| Stack | Files in `.github/workflows/` | Deploy mechanism |
+|-------|-------------------------------|------------------|
+| `web-app-aca` | `api-build-deploy.yaml`, `web-build-deploy.yaml` | ghcr.io + OIDC → provisioner (both containers) |
+| `internal-service-aca` | `api-build-deploy.yaml` | ghcr.io + OIDC → provisioner |
+| `web-app-awa` | `backend-build-deploy.yaml`, `frontend-build-deploy.yaml` | backend: ghcr.io + OIDC → provisioner; frontend: SWA deploy action |
+| `static-web-app` | `azure-static-web-apps.yaml` | SWA deploy action (token) |
 
-Generates two workflow files in `.github/workflows/`:
-
-```
-.github/workflows/
-├── api-build-deploy.yaml    # Backend container build & deploy
-└── web-build-deploy.yaml    # Frontend container build & deploy
-```
-
-Each workflow triggers on `push` to `main` when files in the container's source directory change,
-plus a `workflow_dispatch` trigger for manual runs.
-
-### For `web-app-awa` (Web App + Static Web App)
-
-Generates two workflow files in `.github/workflows/`:
-
-```
-.github/workflows/
-├── backend-build-deploy.yaml     # Backend container to Azure Web App
-└── frontend-build-deploy.yaml    # Frontend to Static Web App
-```
-
-Backend workflow triggers on backend code changes; frontend workflow uses Static Web Apps Deploy action.
-
-### For `internal-service-aca` (Internal Container App)
-
-Generates one workflow file in `.github/workflows/`:
-
-```
-.github/workflows/
-└── api-build-deploy.yaml    # API container build & deploy
-```
-
-Same container build pattern as `web-app-aca` but API service only -- no web workflow, no frontend deploy.
-
-### For `static-web-app` (Static Site Only)
-
-Generates one workflow file in `.github/workflows/`:
-
-```
-.github/workflows/
-└── azure-static-web-apps.yaml    # Frontend to Static Web App
-```
-
-Uses Azure Static Web Apps Deploy action with automatic PR previews.
+Container images are named by service: `ghcr.io/<owner>/<repo>-api`, `-web`, or `-backend`.
 
 ---
 
@@ -62,352 +62,195 @@ Uses Azure Static Web Apps Deploy action with automatic PR previews.
 
 **Always preview first:**
 ```bash
-amplifier-online cicd create --dry-run    # Preview without writing files
+amplifier-online cicd create --dry-run    # Lists the workflows it would generate; writes nothing
 ```
 
 **Generate for real:**
 ```bash
-amplifier-online cicd create              # Writes to .github/workflows/
+amplifier-online cicd create              # Writes .github/workflows/, enrolls the repo, sets GH secrets/vars
 ```
 
-**Verify output:**
-```bash
-ls .github/workflows/
-```
+`cicd create` does three things:
+1. **Detects the repo** via the `gh` CLI (`gh repo view`) — its `nameWithOwner` and numeric
+   `repository_id` — and reads the manifest's `deploy:` block for `ref`/`environment`.
+2. **Calls the provisioner**, which renders the workflow files and (best-effort) writes the deploy
+   **binding tags** onto the project's resource group.
+3. **Writes the workflow files** and **sets the GitHub repository secrets and variables for you**
+   via `gh secret set` / `gh variable set`. If `gh` isn't installed or authenticated, it prints the
+   exact commands to run instead.
+
+**Prerequisites:** `gh` installed and authenticated (`gh auth status`), run from inside the git repo
+that has a GitHub remote.
 
 ---
 
-## Workflow Shapes by Stack
+## Enrollment: Binding Tags
 
-### Stack: `web-app-aca`
+Authorization is anchored to tags the provisioner writes on the project resource group (`ao-<name>-rg`)
+during `cicd create`:
 
-Both generated workflows (`api-build-deploy.yaml`, `web-build-deploy.yaml`) follow this pattern:
+| Tag | Value | Checked against OIDC claim |
+|-----|-------|----------------------------|
+| `ao-deploy-repo-id` | Numeric GitHub repository ID | `repository_id` (must match) |
+| `ao-deploy-ref` | Git ref, e.g. `refs/heads/main` | `ref` (this **or** environment must match) |
+| `ao-deploy-environment` | GitHub environment name, if set | `environment` (this **or** ref must match) |
+| `ao-deploy-repo` | `owner/repo` (informational) | — |
+
+Using the numeric `repository_id` (not the name) means renaming or transferring the repo does not
+silently re-authorize a different repository. To change which repo/ref may deploy, edit the manifest's
+`deploy:` block and re-run `cicd create`.
+
+---
+
+## Container Workflow Shape (`web-app-aca`, `internal-service-aca`, `web-app-awa` backend)
 
 ```
 Trigger: push to main (path filter) or workflow_dispatch
-  ↓
-1. Checkout repository
-2. Set up Docker Buildx
-3. Azure login (OIDC — no stored passwords)
-4. Log in to Azure Container Registry (az acr login)
-5. Build Docker image (with SHA tag + latest tag)
-6. Push both tags to ACR
-7. Update Container App (az containerapp update --image <SHA-tagged-image>)
-8. Health check (curl FQDN/health with retries)
+
+build job  (permissions: id-token: write, contents: read, packages: write, attestations: write)
+  1. Checkout
+  2. Set up Docker Buildx
+  3. Log in to ghcr.io  (username: github.actor, password: secrets.GITHUB_TOKEN)
+  4. Build & push  ghcr.io/<owner>/<repo>-<svc>:<sha>  and  :latest   (registry buildcache)
+  5. Trivy scan (severity CRITICAL,HIGH — fails the build on findings)
+  6. Generate SBOM (anchore)
+  7. Attest build provenance (pushed to the registry)
+
+deploy job  (needs: build, environment: production, permissions: id-token: write, contents: read)
+  1. Checkout
+  2. Get OIDC token:  core.getIDToken('${{ vars.AO_PROVISIONER_AUDIENCE }}')
+  3. POST ${{ vars.AO_PROVISIONER_URL }}/deploy/projects/${{ vars.AO_PROJECT_NAME }}
+       Authorization: Bearer <oidc-token>
+       body: { image, service, ghcr_token, manifest }   # manifest = amplifier-online.yaml as JSON
 ```
 
-**Key design choices:**
-- Uses **OIDC federated credentials** — no long-lived secrets, no stored service principal passwords
-- Builds with **two tags**: `<image>:<sha>` for traceability AND `<image>:latest` for convenience
-- Deploys the **SHA-tagged** image for determinism (not `:latest`)
-- Adds a **revision suffix** from git SHA + run number for easy rollback identification
-- Runs a **health check** after deploy to fail fast on broken deployments
+- The deploy is **stateless**: the workflow sends the checked-out `amplifier-online.yaml` (as JSON) in
+  the request body, so the provisioner needs no server-side copy of the manifest.
+- `ghcr_token` (the run's `GITHUB_TOKEN`) lets the provisioner pull the image from ghcr.io to import
+  it into ACR. The deployed image is the **SHA-tagged** one for determinism.
+- There is **no `az` CLI, no ACR login, and no `az containerapp/webapp` call** in these workflows.
 
-### Stack: `internal-service-aca`
-
-Single generated workflow (`api-build-deploy.yaml`) follows the same pattern as `web-app-aca` API workflows:
+## SWA Workflow Shape (`static-web-app`, `web-app-awa` frontend)
 
 ```
-Trigger: push to main (path filter) or workflow_dispatch
-  |
-1. Checkout repository
-2. Set up Docker Buildx
-3. Azure login (OIDC -- no stored passwords)
-4. Log in to Azure Container Registry (az acr login)
-5. Build Docker image (with SHA tag + latest tag)
-6. Push both tags to ACR
-7. Update Container App (az containerapp update --image <SHA-tagged-image>)
-8. Health check (curl internal endpoint/health with retries)
+Trigger: push to <branch>, pull_request (opened/synchronize/reopened/closed), or workflow_dispatch
+
+build_and_deploy_job:
+  1. Checkout (submodules: true)
+  2. Azure/static-web-apps-deploy@v1
+       azure_static_web_apps_api_token: secrets.AZURE_STATIC_WEB_APPS_API_TOKEN
+       repo_token: secrets.GITHUB_TOKEN
+       env VITE_AZURE_CLIENT_ID / VITE_AZURE_API_CLIENT_ID / VITE_AZURE_TENANT_ID / VITE_AO_CONSUMES
+           (from vars.*, injected at build time)
+close_pull_request_job (on PR close): tears the preview environment down
 ```
 
-**Key difference from `web-app-aca`:** Only one workflow (API only) -- no web/frontend workflow generated.
-
-### Stack: `web-app-awa`
-
-**Backend workflow (`backend-build-deploy.yaml`):**
-
-```
-Trigger: push to main (backend path filter) or workflow_dispatch
-  ↓
-1. Checkout repository
-2. Set up Docker Buildx
-3. Azure login (OIDC)
-4. Log in to Azure Container Registry
-5. Build Docker image
-6. Push to ACR
-7. Update Azure Web App (az webapp config container set)
-8. Health check (curl backend FQDN/health with retries)
-```
-
-**Frontend workflow (`frontend-build-deploy.yaml`):**
-
-```
-Trigger: push to main (frontend path filter), pull_request (for PR previews), or workflow_dispatch
-  ↓
-1. Checkout repository
-2. Azure Static Web Apps Deploy action
-   - Builds frontend (npm run build)
-   - Deploys to Static Web App
-   - Creates PR preview environments
-3. Cleanup on PR close
-```
-
-### Stack: `static-web-app`
-
-**Single workflow (`azure-static-web-apps.yaml`):**
-
-```
-Trigger: push to main, pull_request (for PR previews), or workflow_dispatch
-  ↓
-1. Checkout repository
-2. Azure Static Web Apps Deploy action
-   - Builds static site
-   - Deploys to Static Web App
-   - Creates PR preview environments
-3. Cleanup on PR close
-```
+This is the one stack family that authenticates with a stored **secret** rather than the provisioner
+OIDC path, and the one that gets automatic **PR preview** environments.
 
 ---
 
-## Required GitHub Secrets
+## Secrets and Variables
 
-After generating workflows, set these secrets in your GitHub repository.
+`cicd create` sets these for you (via `gh`); the tables document what ends up in the repo.
 
-### For all container-based stacks (`web-app-aca`, `internal-service-aca`, `web-app-awa` backend)
+### Secrets
 
-Navigate to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+| Secret | When | Source |
+|--------|------|--------|
+| `AZURE_STATIC_WEB_APPS_API_TOKEN` | Projects with an SWA frontend (`static-web-app`, `web-app-awa`) | Fetched live from the deployed SWA via ARM. Only available **after `amplifier-online up`** has created the SWA — if you run `cicd create` before the first `up`, it prints a note; re-run `cicd create` afterward. |
 
-Add these secrets:
+**Container-only projects need no secrets.** There is no `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/
+`AZURE_SUBSCRIPTION_ID` deploy secret and no federated credential — the built-in `GITHUB_TOKEN`
+(ghcr push) plus the run's OIDC token (provisioner deploy) are all the container path uses.
 
-| Secret | What it is | How to find it |
-|--------|-----------|----------------|
-| `AZURE_CLIENT_ID` | Client ID of the Entra app registration with federated credentials | Azure portal → App Registrations → your app → Application (client) ID |
-| `AZURE_TENANT_ID` | Tenant ID of your Azure AD directory | Azure portal → Entra ID → Tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Subscription containing your resources | Azure portal → Subscriptions |
+### Variables (`vars.*`, not secrets)
 
-**Set via GitHub CLI:**
+| Variable | When | What it is |
+|----------|------|------------|
+| `AO_PROVISIONER_URL` | Projects with container services | Base URL the deploy job POSTs to |
+| `AO_PROVISIONER_AUDIENCE` | Projects with container services | Expected `aud` of the GitHub OIDC token |
+| `AO_PROJECT_NAME` | Projects with container services | Project name → deploy path + resource group |
+| `AZURE_TENANT_ID` | Always | Entra tenant → `VITE_AZURE_TENANT_ID` for frontends |
+| `AZURE_CLIENT_ID` | When a login registration exists | `ao-{project}-client` appId → `VITE_AZURE_CLIENT_ID` |
+| `AZURE_API_CLIENT_ID` | When an API registration exists | `ao-{project}-api` appId → `VITE_AZURE_API_CLIENT_ID` |
+| `AO_CONSUMES` | When `auth.consumes` is set | JSON map of cross-project consumed APIs → `VITE_AO_CONSUMES` |
+
+Note the `AZURE_CLIENT_ID` **variable** here is the SPA's login client id used by MSAL.js at build
+time — unrelated to CI/CD deploy identity (there is no CI/CD `AZURE_CLIENT_ID` **secret**).
+
+### `cicd update-vars`
+
 ```bash
-gh secret set AZURE_CLIENT_ID --body "<value>"
-gh secret set AZURE_TENANT_ID --body "<value>"
-gh secret set AZURE_SUBSCRIPTION_ID --body "<value>"
+amplifier-online cicd update-vars
 ```
 
-**Or via GitHub UI:** Settings → Secrets and variables → Actions → New repository secret
-
-### For Static Web App deployments (`web-app-awa` frontend, `static-web-app`)
-
-Add this additional secret:
-
-```
-AZURE_STATIC_WEB_APPS_API_TOKEN  # Get from Azure Portal (Static Web App → Manage deployment token)
-```
-
-**How to get the token:**
-1. Azure Portal → Static Web App → Overview
-2. Click **Manage deployment token**
-3. Copy and add to GitHub repository secrets
-
-### Frontend build-time variables (not secrets) — `web-app-awa` frontend, `static-web-app`
-
-These are GitHub Actions **variables** (`vars.*`), not secrets. `amplifier-online cicd create` sets
-them by resolving the project's `-client` and `-api` appIds (plus any `auth.consumes` producer `-api`
-appIds), and the SWA/AWA frontend workflows pass them in as `VITE_*` at build time:
-
-| Variable | What it is | Passed to build as |
-|----------|-----------|--------------------|
-| `AZURE_CLIENT_ID` | `ao-{project}-client` appId (login client) | `VITE_AZURE_CLIENT_ID` |
-| `AZURE_API_CLIENT_ID` | `ao-{project}-api` appId (API audience for `api://.../access_as_user`) | `VITE_AZURE_API_CLIENT_ID` |
-| `AZURE_TENANT_ID` | Entra tenant ID | `VITE_AZURE_TENANT_ID` |
-| `AO_CONSUMES` | JSON map of cross-project consumed APIs (`auth.consumes` producer `-api` appIds) | `VITE_AO_CONSUMES` |
-
-**Note:** this `AZURE_CLIENT_ID` *variable* (the login client) is distinct from the `AZURE_CLIENT_ID`
-*secret* above (the GitHub-OIDC deploy identity). `static-web-app` is client-only, so its
-`AZURE_API_CLIENT_ID` is empty unless it consumes external APIs via `AO_CONSUMES`.
+Re-resolves the variables above (app-registration ids + provisioner connection details) from live
+Azure state and updates the GitHub repository variables. Run it after `amplifier-online up` has
+recreated app registrations, or whenever the GitHub variables have gone stale. It does **not**
+regenerate workflow files.
 
 ---
 
-## Federated Credentials Setup
+## Security Model
 
-The container workflows use OIDC, which requires a federated credential on the Entra app registration.
-
-**Verify the federated credential exists:**
-```bash
-az ad app federated-credential list --id <client-id>
-```
-
-The credential should be configured for your GitHub organization/repo and the `main` branch.
-If it's missing, the platform operator sets this up as part of platform provisioning — the
-`setup-identity.sh` script creates the `ao-provisioner` app registration with federated
-credentials. For per-project app registrations, `amplifier-online up` handles this automatically.
-
-> **⚠️ The repo must be in a Microsoft-linked GitHub Enterprise org.** OIDC against this tenant
-> requires the GitHub token to carry the `enterprise` claim. Repos in a personal account or a
-> non-enterprise GitHub org fail with **`AADSTS7002381`** — the federated login is rejected
-> because the token lacks that claim. Move the repo into a GitHub Enterprise org linked to the
-> Microsoft tenant, or deploy manually (`amplifier-online up`) instead of via Actions. See the
-> matching failure mode in `troubleshooting-playbook.md`.
+- **Authentication:** the provisioner validates the GitHub Actions OIDC JWT — signature via GitHub's
+  JWKS, `iss = https://token.actions.githubusercontent.com`, `aud = AO_PROVISIONER_AUDIENCE`, and
+  expiry. An invalid/absent token → **401**.
+- **Authorization:** the validated token's `repository_id` must equal `ao-deploy-repo-id`, and its
+  `ref` **or** `environment` must equal `ao-deploy-ref` / `ao-deploy-environment`. Mismatch → **403**.
+- **Blast radius:** GitHub secrets hold no Azure credential for container stacks, so a leaked repo
+  secret cannot be replayed against Azure. The provisioner performs the privileged ACR-import and
+  deploy on the caller's behalf, only for the enrolled repo/ref.
 
 ---
 
 ## Path Filters
 
-Each workflow only triggers when files in its relevant directory change:
-
-### `web-app-aca` workflows
+Each workflow triggers only when files under its service directory change (plus `workflow_dispatch`):
 
 ```yaml
 # api-build-deploy.yaml
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - 'api/**'    # ← Only triggers when api/ directory changes
-
-# web-build-deploy.yaml
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'web/**'    # ← Only triggers when web/ directory changes
+      - 'api/**'      # ← the API service's source directory
 ```
 
-The path filter value comes from your project structure. If your API code is in
-`backend/` rather than `api/`, update the path filter in the generated workflow.
-
-### `internal-service-aca` workflow
-
-```yaml
-# api-build-deploy.yaml
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'api/**'    # <-- Only triggers when api/ directory changes
-```
-
-### `web-app-awa` workflows
-
-```yaml
-# backend-build-deploy.yaml
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'backend/**'    # ← Backend directory
-
-# frontend-build-deploy.yaml
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'frontend/**'   # ← Frontend directory
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'frontend/**'
-```
-
-### `static-web-app` workflow
-
-```yaml
-# azure-static-web-apps.yaml
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-    branches:
-      - main
-```
-
----
-
-## Workflow Variables Reference
-
-Generated workflows use environment variables to identify target resources:
-
-### `web-app-aca`
-
-```yaml
-env:
-  CONTAINER_APP_NAME: <project-name>-api    # Azure Container App to update
-  RESOURCE_GROUP: amplifier-online-rg       # From ~/.amplifier-online/config.yaml
-  ACR_NAME: amplifieronlinecr               # From ~/.amplifier-online/config.yaml
-  IMAGE_NAME: amplifieronlinecr.azurecr.io/<project-name>-api
-```
-
-### `internal-service-aca`
-
-```yaml
-env:
-  CONTAINER_APP_NAME: <project-name>-api    # Azure Container App to update
-  RESOURCE_GROUP: amplifier-online-rg       # From ~/.amplifier-online/config.yaml
-  ACR_NAME: amplifieronlinecr               # From ~/.amplifier-online/config.yaml
-  IMAGE_NAME: amplifieronlinecr.azurecr.io/<project-name>-api
-```
-
-### `web-app-awa` (backend)
-
-```yaml
-env:
-  WEB_APP_NAME: <project-name>-api          # Azure Web App name
-  RESOURCE_GROUP: amplifier-online-rg
-  ACR_NAME: amplifieronlinecr
-  IMAGE_NAME: amplifieronlinecr.azurecr.io/<project-name>-api
-```
-
-### `web-app-awa` and `static-web-app` (frontend)
-
-```yaml
-env:
-  AZURE_STATIC_WEB_APPS_API_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-  # Build-time auth ids come from GitHub Actions variables (set by `cicd create`):
-  VITE_AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}          # ao-{project}-client (login)
-  VITE_AZURE_API_CLIENT_ID: ${{ vars.AZURE_API_CLIENT_ID }}  # ao-{project}-api audience
-  VITE_AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  VITE_AO_CONSUMES: ${{ vars.AO_CONSUMES }}                  # JSON map of consumed APIs
-```
+The path value comes from your project layout. If your API lives in `backend/` rather than `api/`,
+update the `paths:` filter in the generated workflow. SWA workflows additionally trigger on
+`pull_request` for preview environments.
 
 ---
 
 ## First-Time Setup Checklist
 
-After running `amplifier-online cicd create`:
+After `amplifier-online cicd create`:
 
-### For `web-app-aca`, `internal-service-aca`, and `web-app-awa` (backend)
+**All container stacks (`web-app-aca`, `internal-service-aca`, `web-app-awa` backend):**
+- [ ] `AO_PROVISIONER_URL`, `AO_PROVISIONER_AUDIENCE`, `AO_PROJECT_NAME` variables are set
+      (`cicd create` sets them; verify with `gh variable list`).
+- [ ] The project resource group carries `ao-deploy-repo-id` and `ao-deploy-ref`/`-environment` tags
+      (written by `cicd create`; a `403` at deploy time means these don't match the repo/ref).
+- [ ] `amplifier-online up` has been run once so the project + resource group exist (a deploy to a
+      non-existent project returns `404`).
+- [ ] Path filters match your actual source directories.
+- [ ] Each backend container serves `/health`.
 
-- [ ] Set `AZURE_CLIENT_ID` secret in GitHub
-- [ ] Set `AZURE_TENANT_ID` secret in GitHub
-- [ ] Set `AZURE_SUBSCRIPTION_ID` secret in GitHub
-- [ ] Verify federated credential exists on the Entra app registration
-- [ ] Confirm path filters in workflows match your actual source directory layout
-- [ ] Ensure `amplifier-online up` has been run at least once (container apps/web apps must exist before
-      `az containerapp update` or `az webapp config` can run)
-- [ ] Verify a health endpoint exists at `/health` on each backend container (workflows health-check this)
-
-### For `web-app-awa` and `static-web-app` (frontend)
-
-- [ ] Set `AZURE_STATIC_WEB_APPS_API_TOKEN` secret in GitHub
-- [ ] Get token from Azure Portal → Static Web App → Manage deployment token
-- [ ] Confirm build-time **variables** `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`, `AZURE_TENANT_ID`, `AO_CONSUMES` are set (`cicd create` populates these; they are `vars.*`, not secrets)
-- [ ] Confirm `output_location` in `amplifier-online.yaml` matches your build tool's actual output
-- [ ] Verify GitHub repository URL in `amplifier-online.yaml` is correct
-- [ ] Test build locally: `npm run build` produces files in the expected output directory
+**SWA frontends (`static-web-app`, `web-app-awa` frontend):**
+- [ ] `AZURE_STATIC_WEB_APPS_API_TOKEN` secret is set (run `up` first, then `cicd create`).
+- [ ] `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`, `AZURE_TENANT_ID`, `AO_CONSUMES` **variables** are set.
+- [ ] `output_location` in `amplifier-online.yaml` matches your build tool's output.
+- [ ] Local `npm run build` produces files in the expected output directory.
 
 ---
 
 ## Idempotency and Re-running
 
-- Running `amplifier-online cicd create` again regenerates the workflows from the current manifest
-- Changes to stack, service images, or frontend repo in `amplifier-online.yaml` → regenerate workflows
-- Workflow files can be committed to git; treat them as generated but version-controlled
+- `cicd create` regenerates workflows from the current manifest and re-enrolls the repo — safe to
+  re-run after changing stack, services, or the `deploy:` block.
+- Commit the generated workflow files: treat them as generated but version-controlled.
 
 ---
 
@@ -415,47 +258,32 @@ After running `amplifier-online cicd create`:
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `OIDC: Could not fetch access token` | Missing or wrong federated credential | Verify credential via `az ad app federated-credential list` |
-| `ACR login failed` | AZURE_CLIENT_ID secret missing or wrong | Re-set secret in GitHub |
-| `az containerapp update: not found` | Container App doesn't exist yet (web-app-aca or internal-service-aca) | Run `amplifier-online up` first |
-| `az webapp config: not found` | Azure Web App doesn't exist yet | Run `amplifier-online up` first |
-| `Health check failed` | App crashed after deploy or no /health endpoint | Check `amplifier-online logs --container api` |
-| Workflow not triggering | Path filter doesn't match changed files | Update path filter in workflow YAML |
-| Static Web App build fails | `output_location` wrong or build command fails | Test build locally; verify `output_location` matches actual output |
-| `AZURE_STATIC_WEB_APPS_API_TOKEN` invalid | Token expired or wrong | Get new token from Azure Portal |
+| `denied: ... ghcr.io` on push | Workflow lacks `packages: write`, or the org restricts ghcr | Keep the generated `permissions:` block; enable GitHub Packages for the repo/org |
+| Deploy step **401** (`OIDC_VALIDATION_FAILED` / `UNAUTHORIZED`) | Wrong/missing OIDC audience, or `id-token: write` missing on the deploy job | Confirm `AO_PROVISIONER_AUDIENCE` variable matches the platform; keep `permissions: id-token: write` |
+| Deploy step **403** (`DEPLOY_FORBIDDEN`) | OIDC `repository_id`/`ref`/`environment` don't match the `ao-deploy-*` tags | Re-run `cicd create` from the correct repo; align the manifest `deploy:` `ref`/`environment` |
+| Deploy step **404** (`PROJECT_NOT_FOUND`) | Project/resource group doesn't exist, or wrong `AO_PROJECT_NAME` | Run `amplifier-online up` first; verify the `AO_PROJECT_NAME` variable |
+| `Image import failed` in provisioner logs | Provisioner couldn't pull from ghcr | Ensure the image is public or the workflow sends `ghcr_token`; check the image ref |
+| `gh: command not found` during `cicd create` | `gh` not installed/authed | Install + `gh auth login`, or run the printed `gh secret/variable set` commands manually |
+| Trivy fails the build | CRITICAL/HIGH CVE in the image | Patch the base image/deps, or adjust the scan step's `severity`/`exit-code` |
+| Workflow not triggering | Path filter doesn't match changed files | Update the `paths:` filter |
+| SWA build fails / `AZURE_STATIC_WEB_APPS_API_TOKEN` invalid | Wrong `output_location`, or token missing/expired | Test `npm run build`; re-run `cicd create` after `up` to refresh the token |
 
 ---
 
 ## PR Preview Deployments
 
-### For `web-app-awa` and `static-web-app` frontends
+**SWA frontends** (`static-web-app`, `web-app-awa` frontend) get automatic preview environments: open
+a PR → Static Web Apps builds a preview at `https://<site>-<pr-number>.<region>.azurestaticapps.net`;
+pushes update it; closing the PR tears it down. No extra configuration.
 
-The generated frontend workflows automatically create preview deployments for pull requests:
-
-**What happens:**
-1. Open a PR → Azure Static Web Apps creates a preview environment
-2. Preview URL: `https://<your-site>-<pr-number>.azurestaticapps.net`
-3. Push new commits → Preview updates automatically
-4. Close/merge PR → Preview environment deleted automatically
-
-**No additional configuration needed** — this is built into Azure Static Web Apps Deploy action.
-
-### For `web-app-aca`, `internal-service-aca`, and backend containers
-
-PR previews are NOT generated automatically. Backend containers deploy only from `main` branch.
-
-If you want PR previews for containers, you would need to:
-1. Extend the workflow to create separate Container Apps or Web Apps per PR
-2. Add cleanup steps when PR closes
-3. Manage per-PR resources (databases, etc.) if needed
-
-This is beyond the default generated workflows but can be customized.
+**Container stacks** deploy only from the enrolled ref (`main` by default) — no automatic per-PR
+environments. Per-PR container previews would require custom workflow work (separate apps per PR,
+cleanup on close, per-PR backing resources).
 
 ---
 
 ## Related Documentation
 
-For more details on deployment configuration:
-- [Stacks Reference](stacks-reference.md) - Complete guide for all stacks
-- [Manifest Schema](manifest-schema.md) - Project configuration reference
-- [CLI Reference](cli-reference.md) - All CLI commands including `cicd create`
+- [Stacks Reference](stacks-reference.md) — per-stack deployment details
+- [Manifest Schema](manifest-schema.md) — the `deploy:` block and full manifest reference
+- [CLI Reference](cli-reference.md) — `cicd create` and `cicd update-vars`

@@ -743,28 +743,30 @@ producer's `-api` to already exist.
 
 ---
 
-## Failure Mode 19: GitHub Actions OIDC Rejected (`AADSTS7002381`, Missing `enterprise` Claim)
+## Failure Mode 19: `AADSTS7002381` at an Azure login step (retired model — regenerate workflows)
 
-**Applies to:** Setting up CI/CD (`amplifier-online cicd create`) for a repo that is not in a
-Microsoft GitHub enterprise org.
+**Applies to:** Repos whose `.github/workflows/` still contain the **old** Azure-OIDC deploy jobs
+(an `azure/login` step plus `az acr login` / `az containerapp update`).
 
-**Symptom:** The GitHub Actions deploy job fails at the Azure login step:
+**Symptom:** A deploy job fails at an Azure login step:
 ```
 AADSTS7002381: Federated identity credentials issued by
-'https://token.actions.githubusercontent.com/' ... must contain the enterprise
-claim with value 'microsoft', 'github' or 'microsoftopensource' but actual value is ''
+'https://token.actions.githubusercontent.com/' ... must contain the enterprise claim ...
 ```
 
-**Root cause:** The corporate tenant requires the `enterprise` claim in GitHub OIDC tokens.
-Personal repos and non-enterprise org repos produce tokens with an empty `enterprise` claim, so
-the federated credential never matches. This is a hard tenant constraint — it is not a
-misconfiguration of the workflow.
+**Root cause:** The retired container CI/CD model logged in to **Azure AD** via a per-repo Entra
+federated credential, which the corporate tenant only honors for repos in a Microsoft-linked GitHub
+enterprise org. The **current** push-to-deploy model does not log in to Azure AD at all — the deploy
+job mints a GitHub OIDC token for the **provisioner's** audience and POSTs to the provisioner, which
+validates the token itself (issuer / audience / `repository_id` / `ref`). There is **no
+`enterprise`-claim requirement and no enterprise-org constraint** anymore.
 
-**Fix:**
-1. Move the repository to a Microsoft GitHub enterprise org (`microsoft/`,
-   `microsoft-amplifier/`, etc.). The OIDC token will then carry the required `enterprise` claim.
-2. If the repo must stay in a personal/non-enterprise org, you cannot use Actions OIDC against
-   this tenant — deploy manually with `az login` + `amplifier-online up` instead.
+**Fix:** Regenerate the workflows so they use the current model:
+```bash
+amplifier-online cicd create
+```
+If a deploy still fails with a **401 at the provisioner** (not Azure AD), that's a different problem —
+see the OIDC / `AO_PROVISIONER_AUDIENCE` rows in `cicd-guide.md`.
 
 ---
 
@@ -1036,6 +1038,36 @@ endpoint like `COSMOS_ENDPOINT`/`REDIS_HOST`/`DB_HOST`).
 
 ---
 
+## Failure Mode 36: Azure Speech Returns Empty Transcripts for Browser Audio (WebM/Opus)
+
+**Symptom:** An app using `resources.cognitive-services` for speech-to-text calls Azure Speech, gets
+`RecognitionStatus: Success`, but `DisplayText` is **empty** — no error, transcription silently
+produces nothing. Typically hit when the audio was recorded in the browser via `MediaRecorder`.
+
+**Cause:** Browsers record audio as **WebM/Opus**. The Azure Speech **short-form REST endpoint** does
+not decode WebM/Opus — it accepts the container and silently returns an empty result instead of
+erroring.
+
+**Fix:** Transcode to **WAV PCM, 16 kHz, mono** before calling the short-form endpoint. `ffmpeg` is the
+simplest converter but is **not** in the base container image — install it in the Dockerfile:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+ffmpeg -i input.webm -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+Alternatively use the Azure Speech **batch / fast transcription** API, which accepts WebM natively at
+the cost of being asynchronous and more complex to orchestrate.
+
+**Reminder:** `cognitive-services` is **keyless** — there is no `SPEECH_KEY`. Authenticate the Speech
+SDK/REST calls with the injected `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_RESOURCE_ID` plus a
+`DefaultAzureCredential` token (Cognitive Services User role on the container's managed identity).
+
+---
+
 ## AADSTS Error Code → Cause Quick Table
 
 When the only signal is an `AADSTS` code in the browser console or CLI output:
@@ -1046,7 +1078,7 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS9002326` | SPA redirect URI registered under **Web** platform; MSAL needs **SPA** type | Failure Mode 29 |
 | `AADSTS900144` | Empty/missing `client_id` — a build-time var was not baked into the bundle | Build-Time Config Inlining (below) |
 | `AADSTS700016` | Application not found for the client id — stale/wrong client id in config or GitHub vars | Failure Mode 17 |
-| `AADSTS7002381` | GitHub OIDC token missing `enterprise` claim (non-enterprise repo) | Failure Mode 19 |
+| `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `cicd create` | Failure Mode 19 |
 | `AADSTS50105` | User not assigned to a role; or nested/mail-enabled group | Failure Mode 9, Failure Mode 30 |
 | `AADSTS53000` | Conditional Access — device not compliant/managed | Sign in from a compliant device |
 

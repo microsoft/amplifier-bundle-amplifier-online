@@ -559,25 +559,25 @@ stages:
             STEP 2: Create workflows if user approves
               Run: amplifier-online cicd create
 
-            STEP 3: Guide GitHub secrets setup
+            STEP 3: Confirm GitHub secrets/variables
               Load @amplifier-online:context/agent/cicd-guide.md
 
-              Present required secrets based on the selected stack:
+              `amplifier-online cicd create` already sets the repo secrets and variables via `gh`
+              (or prints `gh secret/variable set` commands if gh is unavailable). Confirm them:
 
               If the selected stack is web-app-aca, internal-service-aca, or web-app-awa:
-                For container workflows:
-                  - AZURE_CLIENT_ID
-                  - AZURE_TENANT_ID
-                  - AZURE_SUBSCRIPTION_ID
-
-                How to get these values:
-                [guide from cicd-guide.md]
+                Container workflows need NO Azure secrets — deploys authenticate to the provisioner
+                via a GitHub OIDC token. Verify these repo variables are set (gh variable list):
+                  - AO_PROVISIONER_URL
+                  - AO_PROVISIONER_AUDIENCE
+                  - AO_PROJECT_NAME
 
               If the selected stack is web-app-awa or static-web-app:
-                For Static Web App:
+                For Static Web App, verify the secret:
                   - AZURE_STATIC_WEB_APPS_API_TOKEN
 
-                How to get: Azure Portal -> Static Web App -> Manage deployment token
+                Set automatically after the first `amplifier-online up`; if it was missing when you
+                first ran `cicd create`, re-run `amplifier-online cicd create`.
 
             STEP 4: Commit workflows
               ```bash

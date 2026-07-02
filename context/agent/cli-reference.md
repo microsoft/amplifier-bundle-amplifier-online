@@ -250,29 +250,52 @@ amplifier-online destroy --dry-run  # Show what would be deleted
 
 ## `amplifier-online cicd create`
 
-Generate GitHub Actions workflow files for building and deploying containers. Writes to
+Generate GitHub Actions workflow files and enroll the repo for push-to-deploy. Writes to
 `.github/workflows/` in the current directory.
 
 ```bash
-amplifier-online cicd create            # Write workflow files
-amplifier-online cicd create --dry-run  # Preview without writing
+amplifier-online cicd create            # Generate workflows, enroll repo, set GH secrets/vars
+amplifier-online cicd create --dry-run  # List the workflows it would generate; write/set nothing
 ```
 
 **Generated files (example for `web-app-aca` with 2 containers):**
 - `.github/workflows/api-build-deploy.yaml`
 - `.github/workflows/web-build-deploy.yaml`
 
-**Auth variables (resolved and set automatically):** `cicd create` resolves the project's `-client`
-and `-api` appIds (plus any cross-project producer `-api` appIds from `auth.consumes`) and sets them
-as GitHub Actions variables — `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`, and `AO_CONSUMES` — so SWA
-frontend builds receive them. This is separate from the CI/CD deploy identity below.
+**What it does:** detects the repo via `gh` (`nameWithOwner` + numeric `repository_id`), reads the
+manifest's `deploy:` block for `ref`/`environment` (default `refs/heads/main`), calls the provisioner
+to render the workflows and write the deploy **binding tags** (`ao-deploy-repo-id`, `ao-deploy-ref`,
+`ao-deploy-environment`) onto the project resource group, then writes the workflow files and **sets
+the GitHub repository secrets and variables for you** via `gh`. If `gh` is missing/unauthenticated it
+prints the `gh secret set` / `gh variable set` commands instead.
 
-**Required GitHub secrets (must be set after generating) — the deploy identity:**
-- `AZURE_CLIENT_ID`  (the GitHub-OIDC deploy app — distinct from the project's auth `-client` registration)
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
+**Prerequisites:** `gh` installed and authenticated; run inside the git repo with a GitHub remote.
 
-See cicd-guide.md for the full workflow shape and secret setup instructions.
+**GitHub secrets (container stacks need NONE):** container/Web-App deploys authenticate to the
+provisioner with a GitHub OIDC token — there is no `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/
+`AZURE_SUBSCRIPTION_ID` deploy secret and no federated credential. The only secret is
+`AZURE_STATIC_WEB_APPS_API_TOKEN`, set for SWA frontends and only available **after** `amplifier-online up`
+(re-run `cicd create` after the first `up`).
+
+**GitHub variables (set automatically):** `AO_PROVISIONER_URL`, `AO_PROVISIONER_AUDIENCE`,
+`AO_PROJECT_NAME` (container deploy target), plus `AZURE_CLIENT_ID`, `AZURE_API_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AO_CONSUMES` for frontend (MSAL.js/`VITE_*`) builds.
+
+See `cicd-guide.md` for the full push-to-deploy architecture and security model.
+
+---
+
+## `amplifier-online cicd update-vars`
+
+Re-resolve the GitHub repository **variables** (app-registration ids + provisioner connection
+details) from live Azure state and update them via `gh variable set`. Does not regenerate workflows.
+
+```bash
+amplifier-online cicd update-vars
+```
+
+Use after `amplifier-online up` has recreated app registrations, or whenever the GitHub variables are
+stale.
 
 ---
 
