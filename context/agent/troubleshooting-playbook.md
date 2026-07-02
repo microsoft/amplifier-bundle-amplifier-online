@@ -1038,6 +1038,36 @@ endpoint like `COSMOS_ENDPOINT`/`REDIS_HOST`/`DB_HOST`).
 
 ---
 
+## Failure Mode 36: Azure Speech Returns Empty Transcripts for Browser Audio (WebM/Opus)
+
+**Symptom:** An app using `resources.cognitive-services` for speech-to-text calls Azure Speech, gets
+`RecognitionStatus: Success`, but `DisplayText` is **empty** — no error, transcription silently
+produces nothing. Typically hit when the audio was recorded in the browser via `MediaRecorder`.
+
+**Cause:** Browsers record audio as **WebM/Opus**. The Azure Speech **short-form REST endpoint** does
+not decode WebM/Opus — it accepts the container and silently returns an empty result instead of
+erroring.
+
+**Fix:** Transcode to **WAV PCM, 16 kHz, mono** before calling the short-form endpoint. `ffmpeg` is the
+simplest converter but is **not** in the base container image — install it in the Dockerfile:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+ffmpeg -i input.webm -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+Alternatively use the Azure Speech **batch / fast transcription** API, which accepts WebM natively at
+the cost of being asynchronous and more complex to orchestrate.
+
+**Reminder:** `cognitive-services` is **keyless** — there is no `SPEECH_KEY`. Authenticate the Speech
+SDK/REST calls with the injected `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_RESOURCE_ID` plus a
+`DefaultAzureCredential` token (Cognitive Services User role on the container's managed identity).
+
+---
+
 ## AADSTS Error Code → Cause Quick Table
 
 When the only signal is an `AADSTS` code in the browser console or CLI output:

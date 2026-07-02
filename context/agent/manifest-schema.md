@@ -658,6 +658,17 @@ When your containers deploy, Amplifier Online **automatically injects environmen
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
 
+> **`amplifier-online up` is declarative — put custom env vars in the manifest, never set them with `az`.**
+> Each `up` rewrites the container's **entire** environment list from `services.<name>.env` plus the
+> auto-injected variables below. Anything added out-of-band via `az containerapp update` (or the
+> portal) is **wiped on the next deploy** — so the only durable home for a custom variable is the
+> service's `env:` block. (A Container App *secret* set via `az` may appear to survive, because the
+> ACA provider never returns secret values and so can't reconcile it away — but the env var
+> *referencing* that secret is still wiped, so the container stops seeing it. Don't rely on this.)
+> This is also why there is no `SPEECH_KEY`/API-key injection for `cognitive-services`: the platform
+> is keyless by design — authenticate with the injected `*_ENDPOINT`/`*_REGION` vars and
+> `DefaultAzureCredential`.
+
 > **The `vm` stack does not inject these as container env vars** — it has no containers. Instead, the
 > resource-connection variables (Cosmos/Redis/Storage/Cognitive Services, same names as below) are
 > written to **`/etc/amplifier-online/resources.env`** on the VM by a Run Command, refreshed on every
