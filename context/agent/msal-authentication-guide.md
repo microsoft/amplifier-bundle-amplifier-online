@@ -349,9 +349,11 @@ from middleware.jwt_middleware import JWTAuthMiddleware
 app.add_middleware(JWTAuthMiddleware)
 ```
 
-The middleware reads `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` from environment variables
+The middleware reads `AZURE_API_CLIENT_ID` and `AZURE_TENANT_ID` from environment variables
 (auto-injected by the platform) and validates tokens against Entra's JWKS endpoint. On a backend,
-`AZURE_CLIENT_ID` is the **`-api` appId**, and the middleware enforces `aud == api://{AZURE_CLIENT_ID}`.
+`AZURE_API_CLIENT_ID` is the **`-api` appId**, and the middleware enforces `aud == api://{AZURE_API_CLIENT_ID}`.
+(The backend audience uses the non-reserved `AZURE_API_CLIENT_ID`; `AZURE_CLIENT_ID` is left free
+because azure-identity reads it as a user-assigned MI client id, which would break keyless auth.)
 
 ---
 
@@ -527,7 +529,7 @@ Your containers automatically receive these authentication environment variables
 |----------|-------|-------------|---------|
 | `AZURE_CLIENT_ID` | frontend | the `-client` appId — who the SPA signs in AS | `a1b2c3d4-...` |
 | `AZURE_API_CLIENT_ID` | frontend | the `-api` appId — audience for `access_as_user` | `e5f6...` |
-| `AZURE_CLIENT_ID` | backend | the `-api` appId — validated audience (`api://{id}`) | `e5f6...` |
+| `AZURE_API_CLIENT_ID` | backend | the `-api` appId — validated audience (`api://{id}`) | `e5f6...` |
 | `AZURE_TENANT_ID` | both | Microsoft tenant ID | `72f988bf-...` |
 
 The frontend ids are written to `/auth-config.json` by the container entrypoint (keys `clientId`,
@@ -543,8 +545,8 @@ when applicable) as GitHub Actions **build-time** variables. Your SPA reads thes
 `/auth-config.json` runtime fetch pattern used by container stacks. See "SWA Frontend Auth
 Configuration" section below for details.
 
-**API services:** Use `AZURE_CLIENT_ID` (the `-api` appId) to configure the JWT middleware audience
-(`api://{AZURE_CLIENT_ID}`) and `AZURE_TENANT_ID` to derive the JWKS endpoint URL.
+**API services:** Use `AZURE_API_CLIENT_ID` (the `-api` appId) to configure the JWT middleware audience
+(`api://{AZURE_API_CLIENT_ID}`) and `AZURE_TENANT_ID` to derive the JWKS endpoint URL.
 
 > **Note:** The frontend's `AZURE_CLIENT_ID` is the **per-project `-client` Entra registration** used
 > by MSAL.js for end-user authentication. Do **not** confuse it with the CI/CD DEPLOY identity's

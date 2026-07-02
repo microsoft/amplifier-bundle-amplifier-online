@@ -424,7 +424,7 @@ or returns 500 Internal Server Error with JWT-related errors in logs:
 ```
 HTTP 401 - Unauthorized (on every API call with a Bearer token)
 HTTP 500 - jwt_middleware: JWKS endpoint not configured
-KeyError: 'AZURE_CLIENT_ID' or 'AZURE_TENANT_ID'
+KeyError: 'AZURE_API_CLIENT_ID' or 'AZURE_TENANT_ID'
 ```
 
 Alternatively, the API accepts all requests without authentication (no middleware at all).
@@ -442,7 +442,7 @@ Common causes:
 
 1. **Middleware not installed:** The `jwt_middleware.py` template was not added to the API service.
 2. **Middleware not registered:** The middleware file exists but is not registered in the FastAPI app.
-3. **Missing environment variables:** `AZURE_CLIENT_ID` or `AZURE_TENANT_ID` not available (auth
+3. **Missing environment variables:** `AZURE_API_CLIENT_ID` or `AZURE_TENANT_ID` not available (auth
    not enabled for the service in the manifest).
 4. **Missing dependency:** The `PyJWT` and `cryptography` packages are not in the container's
    `requirements.txt`.
@@ -466,7 +466,7 @@ Common causes:
    cryptography>=41.0.0
    ```
 
-4. A backend API service is always given a `-api` registration, so `AZURE_CLIENT_ID` (the
+4. A backend API service is always given a `-api` registration, so `AZURE_API_CLIENT_ID` (the
    `-api` appId) and `AZURE_TENANT_ID` are injected — confirm the middleware reads them.
 
 5. Rebuild, push, and redeploy:
@@ -477,9 +477,9 @@ Common causes:
    ```
 
 **Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
-API service's responsibility via JWT middleware. On the backend, `AZURE_CLIENT_ID` is the
+API service's responsibility via JWT middleware. On the backend, `AZURE_API_CLIENT_ID` is the
 project's `-api` registration (`ao-{project}-api`). The middleware validates signatures against
-Entra's JWKS endpoint, checks audience (`api://{AZURE_CLIENT_ID}`), issuer, and expiry, and
+Entra's JWKS endpoint, checks audience (`api://{AZURE_API_CLIENT_ID}`), issuer, and expiry, and
 extracts user identity from JWT claims.
 
 ---
