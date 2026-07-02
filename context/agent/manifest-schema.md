@@ -123,7 +123,7 @@ errors, warnings, or blockers. Flagging any of these is a **false positive**.
 | `resources.postgres.type: azure-postgres-flexible` | Valid resource config field — platform-managed. |
 | `resources.postgres.sku: B_Standard_B1ms` | Valid resource config field — platform-managed. |
 | `resources.postgres.storage_mb: 32768` | Valid resource config field — platform-managed. |
-| `env:` value containing `${POSTGRES_CONNECTION_STRING}` | Variable interpolation — resolved at deploy time to the auto-injected connection string. Valid syntax. |
+| `env:` value containing `${DB_HOST}` (or any auto-injected var) | Variable interpolation — resolved at deploy time to the auto-injected value. Valid syntax. |
 | `env:` value containing `${VAR_NAME}` | Variable interpolation — all `${...}` references in env values are resolved at deploy time. Valid syntax. |
 | `env:` as YAML map (`env: {KEY: VALUE}`) | Both list-of-objects and map forms are accepted. |
 | `env:` as list of `{name, value}` objects | Standard form, always valid. |
@@ -261,9 +261,10 @@ appropriate because only one process ever writes.
 > **Prefer PostgreSQL for relational data.** If your application uses SQLite for structured
 > application data (user records, orders, sessions — not embedded caching or FTS indexes),
 > strongly recommend enabling `resources.postgres` instead. The platform provisions a managed
-> PostgreSQL Flexible Server with no SMB locking constraints, connection credentials are
-> injected automatically via `POSTGRES_CONNECTION_STRING`, and the database survives container
-> instance replacement. The SQLite-on-volume workaround above is appropriate only for
+> PostgreSQL Flexible Server with no SMB locking constraints; access is **keyless** (`DB_HOST`,
+> `DB_NAME`, `DB_USER` injected, no password — the app fetches an Entra token via
+> `DefaultAzureCredential`), and the database survives container instance replacement. The
+> SQLite-on-volume workaround above is appropriate only for
 > file-adjacent data (e.g., FTS indexes, embedded caches, append-only logs) where a separate
 > database server is overkill.
 
@@ -293,11 +294,14 @@ appropriate because only one process ever writes.
   egress originates; `vnet` = the whole VNet) or a CIDR. There is **no public ingress** regardless.
 - `image` — optional OS image block (`publisher`/`offer`/`sku`/`version`); defaults to Ubuntu
   24.04 LTS.
-- **No Postgres.** The `vm` stack supports `cosmos`, `redis`, `storage`, and `cognitive-services`
-  only (see `resources` below). Resource access is **RBAC-only via the VM's managed identity — no
-  env vars are injected** (unlike container stacks). Software on the VM authenticates with
-  `DefaultAzureCredential`/IMDS and must be told the shared resource endpoints itself (e.g. via
-  cloud-init).
+- **Resources.** The `vm` stack supports `cosmos`, `redis`, `storage`, `cognitive-services`, and
+  `postgres` (see `resources` below). Enabling one grants the VM's managed identity keyless access **and** writes
+  the same connection info the ACA stacks inject as env vars to **`/etc/amplifier-online/resources.env`**
+  on the VM — written by a Run Command and **refreshed on every `up`** (so a resource added later
+  reaches the VM). Software authenticates with `DefaultAzureCredential`/IMDS and reads endpoints from
+  that file; source it at **service start** (systemd/`runcmd`), not at cloud-init parse time — it
+  lands shortly after boot. Postgres is keyless here too: the VM gets `DB_HOST`/`DB_NAME`/`DB_USER`
+  (`DB_USER` = `<project>-vm`), no password.
 
 ### `auth` (top-level — registration model)
 
@@ -320,14 +324,16 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 ### `resources`
 - **Optional** (all disabled by default).
 - **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, `web-app-awa`, and `vm`)
-- **`vm` caveat:** supports `cosmos`, `redis`, `storage`, and `cognitive-services` **but NOT
-  `postgres`** (Postgres uses password auth, not managed identity). On `vm`, access is granted as
-  RBAC on the VM's managed identity — **the connection env vars below are NOT injected** (that
-  mechanism is container-only); the VM authenticates via `DefaultAzureCredential`/IMDS.
+- **`vm` note:** supports `cosmos`, `redis`, `storage`, `cognitive-services`, and `postgres`. On `vm`,
+  the same connection variables below are written to `/etc/amplifier-online/resources.env` (via a Run
+  Command, refreshed on `up`) rather than injected as container env vars; the VM authenticates via
+  `DefaultAzureCredential`/IMDS.
 - Enabling a resource provisions Azure infrastructure for that project. Costs apply.
-- **postgres**: Adds a database and user on the shared PostgreSQL server; injected as
-  `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (there is no `DATABASE_URL`). *(Not available on
-  the `vm` stack.)*
+- **postgres**: Adds a database on the shared PostgreSQL server and a keyless Entra login for the
+  workload's managed identity; injected as `DB_HOST`, `DB_NAME`, `DB_USER` (there is no `DATABASE_URL`
+  and **no `DB_PASSWORD`** — the app fetches an Entra token via `DefaultAzureCredential` and uses it as
+  the password). `DB_USER` is the app's managed-identity name (`<project>-api` for containers,
+  `<project>-vm` for VMs).
 - **cosmos**: Provisions a Cosmos DB database; injected as `COSMOS_ENDPOINT`, `COSMOS_DATABASE` —
   no key, access is keyless via the container's managed identity (RBAC data role)
 - **redis**: Grants keyless access to the shared Azure Managed Redis cache; injected as
@@ -511,14 +517,15 @@ vm:
 
 resources:
   cosmos:
-    enabled: false        # keyless via the VM's managed identity — NO env vars injected
+    enabled: false        # keyless (MI RBAC); endpoints written to /etc/amplifier-online/resources.env
   redis:
     enabled: false
   storage:
     enabled: false
   cognitive-services:
     enabled: false
-  # postgres is NOT supported on the vm stack
+  postgres:
+    enabled: false  # keyless: DB_HOST/DB_NAME/DB_USER (DB_USER = <project>-vm), no password
 ```
 
 ### Minimal: API only (web-app-aca, single service)
@@ -613,7 +620,7 @@ resources:
 | SSH | Key auth only (`ssh_public_key`). No public SSH — manage via `az vm run-command` |
 | Networking | No public IP. Default-deny NSG; only listed `ports` allowed, from `source` (`cae-infra`/`vnet`/CIDR) |
 | Data disk | Optional `data_disk_gib` (0 = none); persists across `up` re-runs |
-| Resources | Supports: cosmos, redis, storage, cognitive-services (RBAC via MI, **no env-var injection**). **No postgres.** |
+| Resources | Supports: cosmos, redis, storage, cognitive-services (keyless MI RBAC; endpoints written to `/etc/amplifier-online/resources.env`, refreshed on `up`). **Postgres not yet supported (deferred).** |
 | Auth | None — no EasyAuth, no login client, no JWT middleware, no App Insights |
 
 ---
@@ -626,11 +633,12 @@ When your containers deploy, Amplifier Online **automatically injects environmen
 on the resources you enable and auth configuration. These are available to your application code
 without needing to declare them in `services.<name>.env`.
 
-> **The `vm` stack receives NONE of the variables below.** Env-var injection is a container
-> mechanism; a VM only gets its cloud-init document. The VM's managed identity is granted the same
-> keyless RBAC (Cosmos/Redis/Storage/Cognitive Services), but the software must discover endpoints
-> itself and authenticate via `DefaultAzureCredential`/IMDS. There is no App Insights and no auth
-> injection on `vm`.
+> **The `vm` stack does not inject these as container env vars** — it has no containers. Instead, the
+> resource-connection variables (Cosmos/Redis/Storage/Cognitive Services, same names as below) are
+> written to **`/etc/amplifier-online/resources.env`** on the VM by a Run Command, refreshed on every
+> `up`; source that file at service start and authenticate via `DefaultAzureCredential`/IMDS. There
+> is **no App Insights and no auth injection** on `vm`, and **Postgres is not yet supported**
+> (deferred).
 
 ### Injected When Auth Is Configured (any service or frontend has auth enabled)
 
@@ -669,23 +677,31 @@ registration entirely and these variables are not set.
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `DB_HOST` | string | Postgres server FQDN | Database connection |
+| `DB_HOST` | string | Postgres server private FQDN (resolves to a private IP via the private DNS zone) | Database connection |
 | `DB_NAME` | string | Database name (project name, `-` → `_`) | |
-| `DB_USER` | string | Admin username from global config | |
-| `DB_PASSWORD` | string | Admin password (see secrets note below) | |
+| `DB_USER` | string | The app's managed-identity name (its Entra Postgres login), e.g. `<project>-api` | |
 
-There is **no** `DATABASE_URL` and no port variable (Postgres SSL port is `5432`).
+There is **no** `DATABASE_URL`, **no `DB_PASSWORD`** (keyless — Entra token auth), and no port
+variable (Postgres SSL port is `5432`). Access is keyless: the server has Entra auth enabled, and the
+provisioner creates a per-app login for the workload's managed identity. The app fetches a short-lived
+Entra token (scope `https://ossrdbms-aad.database.windows.net/.default`) and passes it as the password.
 
 **Example usage (Python with asyncpg):**
 ```python
 import os
 import asyncpg
+from azure.identity.aio import DefaultAzureCredential
+
+# Keyless: fetch an Entra token and use it as the password (no DB_PASSWORD).
+# Refresh before it expires (~1h) for long-lived connections/pools.
+cred = DefaultAzureCredential()
+token = (await cred.get_token("https://ossrdbms-aad.database.windows.net/.default")).token
 
 conn = await asyncpg.connect(
     host=os.environ["DB_HOST"],
     database=os.environ["DB_NAME"],
-    user=os.environ["DB_USER"],
-    password=os.environ["DB_PASSWORD"],
+    user=os.environ["DB_USER"],   # the app's managed-identity name, e.g. "<project>-api"
+    password=token,
     ssl="require",
 )
 ```
@@ -790,8 +806,8 @@ services:
         value: "some-value"
       - name: FEATURE_FLAG_X
         value: "true"
-      - name: DATABASE_URL
-        value: ${POSTGRES_CONNECTION_STRING}   # variable interpolation is valid
+      - name: PRIMARY_DB_HOST
+        value: ${DB_HOST}   # variable interpolation is valid
 ```
 
 **Syntax:** `env` must be a YAML list of `{name, value}` objects as shown above. A YAML
@@ -800,24 +816,21 @@ Do NOT flag either format as an error during manifest review.
 
 **Rules:**
 - Custom env vars are merged with auto-injected vars
-- Auto-injected vars take precedence (you cannot override `DB_PASSWORD`, `AZURE_CLIENT_ID`, etc.)
+- Auto-injected vars take precedence (you cannot override `DB_HOST`, `DB_USER`, `AZURE_CLIENT_ID`, etc.)
 - Use custom env vars for feature flags and non-resource config
 - **Variable interpolation is supported.** Env values support `${VAR_NAME}` syntax for
-  referencing platform-injected variables. For example, `value: ${POSTGRES_CONNECTION_STRING}`
-  resolves at deploy time to the auto-injected connection string. This is **valid manifest syntax**
-  — do NOT flag it as an error during manifest review. `POSTGRES_CONNECTION_STRING` is
-  auto-injected by the platform when `resources.postgres` is configured (even without an
-  explicit `enabled: true` — see resource defaults above). Other auto-injected vars include
-  `DB_PASSWORD`, `AZURE_CLIENT_ID`, etc. (Cosmos, Redis, and Storage are keyless — no key or
-  password is injected for them.)
+  referencing platform-injected variables. For example, `value: ${DB_HOST}` resolves at deploy
+  time to the auto-injected Postgres host. This is **valid manifest syntax** — do NOT flag it as
+  an error during manifest review. When `resources.postgres` is configured (even without an
+  explicit `enabled: true` — see resource defaults above), the platform auto-injects
+  `DB_HOST`/`DB_NAME`/`DB_USER` (no `DB_PASSWORD` — keyless). Other auto-injected vars include
+  `AZURE_CLIENT_ID`, the Cosmos/Redis/Storage/Cognitive-Services endpoints, etc.
 - **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a
-  secret in a plain `env:` value; rely on the auto-injected resource credentials instead.
-- **How the auto-injected credentials are stored differs by stack:** the only remaining
-  injected secret is the Postgres password — on `web-app-aca` and `internal-service-aca`
-  `DB_PASSWORD` is a Container Apps `secretRef` (platform-backed, not plaintext); on
-  **`web-app-awa` it is injected as a plaintext app-setting value** (visible in the Azure
-  portal). Cosmos, Redis, and Storage are keyless on every stack (managed-identity/RBAC), so
-  no key/password is injected for them.
+  secret in a plain `env:` value; rely on keyless managed-identity auth instead.
+- **All data resources are keyless — no secret is injected on any stack.** Postgres, Cosmos,
+  Redis, Storage, and Cognitive Services all authenticate with the workload's managed identity
+  (Postgres via an Entra token as the password; the others via RBAC / access-policy). Nothing
+  secret is stored as an app setting or `secretRef`.
 
 ---
 
@@ -878,5 +891,5 @@ Before running `amplifier-online up`, verify:
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`
 - [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)
 - [ ] Resource flags (`enabled: true/false`) are intentional
-- [ ] For `vm`: `vm.ssh_public_key` is the PUBLIC key, `vm.cloud_init` points to an existing file, and `resources.postgres` is NOT set (unsupported)
+- [ ] For `vm`: `vm.ssh_public_key` is the PUBLIC key and `vm.cloud_init` points to an existing file (`resources.postgres` is supported on `vm` — keyless, like the other resources)
 - [ ] Global config (`~/.amplifier-online/config.yaml`) matches the target environment's `acr_name`
