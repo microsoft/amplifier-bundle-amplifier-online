@@ -373,10 +373,10 @@ Do NOT use WAL mode — its shared memory files are incompatible with SMB.
 application data (user records, orders, sessions — not an embedded cache or FTS index),
 the recommended fix is to enable `resources.postgres.enabled: true` in the manifest
 rather than applying the VFS workaround. This eliminates the SMB locking constraint
-entirely, provides a managed database that survives container instance replacement,
-and connection credentials are injected automatically via `POSTGRES_CONNECTION_STRING`.
-The VFS workaround is appropriate for file-adjacent data where a separate database
-server is overkill.
+entirely, provides a managed database that survives container instance replacement, and
+uses keyless auth (`DB_HOST`/`DB_NAME`/`DB_USER` injected, no password — the app fetches an
+Entra token via `DefaultAzureCredential`). The VFS workaround is appropriate for file-adjacent
+data where a separate database server is overkill.
 
 ---
 
@@ -1012,23 +1012,21 @@ direction — an ACA app reaching the VM — works over the VM's private IP; see
 **Applies to:** `vm` stack.
 
 **Symptom:** Software on the VM can't find `/etc/amplifier-online/resources.env` (or it's missing an
-endpoint like `COSMOS_ENDPOINT`/`REDIS_HOST`), or `amplifier-online up` now **rejects** a `vm`
-manifest that lists `resources.postgres`.
+endpoint like `COSMOS_ENDPOINT`/`REDIS_HOST`/`DB_HOST`).
 
 **Root cause:**
-1. **Postgres is not yet supported on `vm`** (deferred — it carries a secret). Per-stack validation
-   now rejects `resources.postgres` on `vm` with a clear error instead of silently dropping it. Only
-   `cosmos`, `redis`, `storage`, and `cognitive-services` are available.
-2. **`resources.env` timing.** Enabled keyless resources are written to
+1. **`resources.env` timing.** Enabled keyless resources (`cosmos`, `redis`, `storage`,
+   `cognitive-services`, `postgres` — all keyless) are written to
    `/etc/amplifier-online/resources.env` by a **Run Command** — it lands **shortly after boot**, not
    at cloud-init parse time. Software that reads it inline during cloud-init can race ahead of it.
-3. **First-run / stale file.** The file is (re)written on every `up` whose resource set changed. If
+2. **First-run / stale file.** The file is (re)written on every `up` whose resource set changed. If
    you enabled a resource but haven't re-run `up`, or you're on an old VM provisioned before this
    feature, the file won't reflect the change until the next `up`.
 
 **Fix:**
-- Remove `resources.postgres` from a `vm` manifest (use Cosmos, or fetch a Key Vault secret
-  yourself). Postgres-on-vm is a roadmap item.
+- For `postgres` on a VM, the file provides `DB_HOST`/`DB_NAME`/`DB_USER` (keyless, no password) —
+  the VM fetches an Entra token (scope `https://ossrdbms-aad.database.windows.net/.default`) via
+  `DefaultAzureCredential`/IMDS and uses it as the password.
 - **Source `/etc/amplifier-online/resources.env` at service start** (a systemd unit or `runcmd`
   step), not inline at cloud-init parse time. Authenticate to the resource with
   `DefaultAzureCredential`/IMDS — the file provides endpoints, not keys.

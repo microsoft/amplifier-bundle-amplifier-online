@@ -201,7 +201,7 @@ nginx reverse-proxy hop, which drops the header unless you set it explicitly.
 - **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
 
-> **Resource access (awa-specific):** Cosmos and Redis are keyless — the backend's managed identity is granted a Cosmos DB Data Contributor role (and the per-project database is created) and a Redis access policy, both via platform-RG modules, so no key is injected. The only injected secret is the Postgres password, which on this stack is a **plaintext app setting** (not a Key Vault secret ref). **Storage** still has neither a key nor an RBAC grant on this stack, so keyless Storage access would require a manual role assignment — prefer `web-app-aca` for keyless Storage. (Injected variable names: see `manifest-schema.md`.)
+> **Resource access (awa-specific):** all data resources are keyless on this stack — the backend's managed identity is granted the access each one needs via platform-RG modules, so no key or password is injected. Cosmos (Data Contributor role + per-project database), Redis (access-policy assignment), **Storage** (Storage Blob Data Contributor via `_shared/storage-role.bicep`), Cognitive Services (Cognitive Services User), and **Postgres** (Entra auth — a per-app login is created for the backend's identity; `DB_HOST`/`DB_NAME`/`DB_USER` injected, no password — connect with an Entra token). (Injected variable names: see `manifest-schema.md`.)
 
 ### Best for
 
@@ -727,7 +727,7 @@ resources:                     # optional keyless access, granted to the VM's ma
   redis: { enabled: false }
   storage: { enabled: false }
   cognitive-services: { enabled: false }
-  # postgres is not yet supported on vm (deferred)
+  postgres: { enabled: false }   # keyless: DB_HOST/DB_NAME/DB_USER (DB_USER = <project>-vm), no password
 ```
 
 **Key concepts:**
