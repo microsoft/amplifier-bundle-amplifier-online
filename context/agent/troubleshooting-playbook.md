@@ -743,28 +743,30 @@ producer's `-api` to already exist.
 
 ---
 
-## Failure Mode 19: GitHub Actions OIDC Rejected (`AADSTS7002381`, Missing `enterprise` Claim)
+## Failure Mode 19: `AADSTS7002381` at an Azure login step (retired model — regenerate workflows)
 
-**Applies to:** Setting up CI/CD (`amplifier-online cicd create`) for a repo that is not in a
-Microsoft GitHub enterprise org.
+**Applies to:** Repos whose `.github/workflows/` still contain the **old** Azure-OIDC deploy jobs
+(an `azure/login` step plus `az acr login` / `az containerapp update`).
 
-**Symptom:** The GitHub Actions deploy job fails at the Azure login step:
+**Symptom:** A deploy job fails at an Azure login step:
 ```
 AADSTS7002381: Federated identity credentials issued by
-'https://token.actions.githubusercontent.com/' ... must contain the enterprise
-claim with value 'microsoft', 'github' or 'microsoftopensource' but actual value is ''
+'https://token.actions.githubusercontent.com/' ... must contain the enterprise claim ...
 ```
 
-**Root cause:** The corporate tenant requires the `enterprise` claim in GitHub OIDC tokens.
-Personal repos and non-enterprise org repos produce tokens with an empty `enterprise` claim, so
-the federated credential never matches. This is a hard tenant constraint — it is not a
-misconfiguration of the workflow.
+**Root cause:** The retired container CI/CD model logged in to **Azure AD** via a per-repo Entra
+federated credential, which the corporate tenant only honors for repos in a Microsoft-linked GitHub
+enterprise org. The **current** push-to-deploy model does not log in to Azure AD at all — the deploy
+job mints a GitHub OIDC token for the **provisioner's** audience and POSTs to the provisioner, which
+validates the token itself (issuer / audience / `repository_id` / `ref`). There is **no
+`enterprise`-claim requirement and no enterprise-org constraint** anymore.
 
-**Fix:**
-1. Move the repository to a Microsoft GitHub enterprise org (`microsoft/`,
-   `microsoft-amplifier/`, etc.). The OIDC token will then carry the required `enterprise` claim.
-2. If the repo must stay in a personal/non-enterprise org, you cannot use Actions OIDC against
-   this tenant — deploy manually with `az login` + `amplifier-online up` instead.
+**Fix:** Regenerate the workflows so they use the current model:
+```bash
+amplifier-online cicd create
+```
+If a deploy still fails with a **401 at the provisioner** (not Azure AD), that's a different problem —
+see the OIDC / `AO_PROVISIONER_AUDIENCE` rows in `cicd-guide.md`.
 
 ---
 

@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, `frontend`, `vm`, `auth`, and `resources`.
+> `services`, `frontend`, `vm`, `auth`, `resources`, and `deploy`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -40,6 +40,18 @@ services:
     volume:                   # Optional per-service persistent volume
       mount_path: <path>      # Mount path inside the container
       size_gib: <integer>     # Volume size in GiB
+    deploy:                   # Optional per-service push-to-deploy override (see the `deploy` block below)
+      repo: <owner/repo>
+      ref: <git-ref>          # e.g. refs/heads/main
+      environment: <gh-env>   # GitHub environment name (alternative to ref)
+
+# Push-to-deploy binding (optional; project-level default for all services)
+# Consumed by `amplifier-online cicd create` to authorize the GitHub repo/ref/environment
+# that may deploy. Defaults to refs/heads/main when omitted.
+deploy:
+  repo: <owner/repo>          # Defaults to the detected GitHub remote
+  ref: <git-ref>              # e.g. refs/heads/main (default)
+  environment: <gh-env>       # GitHub environment name (alternative to ref)
 
 # Frontend config (required for web-app-awa and static-web-app)
 frontend:
@@ -346,6 +358,19 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
   (plus `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_RESOURCE_ID` aliases for Speech-SDK ergonomics —
   the resource ID is needed for text-to-speech / speaker recognition) —
   no key, access is via the container's managed identity (Cognitive Services User role)
+
+### `deploy` (push-to-deploy binding)
+- **Optional.** Consumed by `amplifier-online cicd create` to authorize which GitHub repo/ref/environment
+  may deploy this project — it is **not** used by `amplifier-online up`.
+- Valid at the **top level** (default for the project) and **per-service** (`services.<name>.deploy`) as
+  an override. Fields: `repo` (`owner/repo`), `ref` (git ref, e.g. `refs/heads/main`), `environment`
+  (GitHub environment name).
+- **Defaults:** `repo` is the detected GitHub remote; `ref` defaults to `refs/heads/main`. Set
+  `environment` as an **alternative to `ref`** — the provisioner authorizes a deploy when the OIDC
+  token's `ref` **or** `environment` claim matches.
+- These values become the resource-group binding tags (`ao-deploy-ref`, `ao-deploy-environment`) that
+  the provisioner checks each container deploy against. Change them and re-run `cicd create` to
+  re-enroll. See `cicd-guide.md`.
 
 ---
 
