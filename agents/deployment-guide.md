@@ -140,8 +140,8 @@ of 12 turns, then summarize open questions and return.
      valid platform-managed config
    - The `cognitive-services` resource (shared multi-service Azure AI Services, keyless) alongside
      `postgres`, `cosmos`, `redis`, `storage` — all valid on the backend stacks (not `static-web-app`)
-   - `${VAR}` interpolation in env values (e.g. `${POSTGRES_CONNECTION_STRING}`) — resolved at
-     deploy time; `POSTGRES_CONNECTION_STRING` is auto-injected when postgres is configured
+   - `${VAR}` interpolation in env values (e.g. `${DB_HOST}`) — resolved at deploy time to an
+     auto-injected variable (`DB_HOST`/`DB_NAME`/`DB_USER` when postgres is configured; keyless, no password)
    - Both `env:` formats: list of `{name, value}` objects and YAML map (`KEY: VALUE`)
 
 5. **Prefer `--dry-run` before destructive ops.** When the user is about to run `up`, `destroy`, or
