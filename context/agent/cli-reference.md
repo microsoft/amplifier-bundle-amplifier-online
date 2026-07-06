@@ -194,8 +194,11 @@ amplifier-online up --dry-run  # Preview what would happen without making change
 **Prerequisites:**
 - Global config exists (`amplifier-online config`)
 - `amplifier-online.yaml` present in current directory
-- Docker images already built and pushed to ACR (for container stacks)
 - Images in manifest reference ACR (`<acr-name>.azurecr.io/...` format)
+- Image delivery is handled by push-to-deploy (`amplifier-online cicd create`, then `git push`) —
+  CI builds and pushes to your ghcr.io and the provisioner imports into ACR. You do **not** build
+  or push to the shared ACR yourself. On a first `up` the image may not exist until the first
+  workflow run completes.
 
 **Always suggest `--dry-run` first** when a user is about to run `up` for the first time.
 
@@ -262,11 +265,9 @@ amplifier-online cicd create --dry-run  # List the workflows it would generate; 
 - `.github/workflows/api-build-deploy.yaml`
 - `.github/workflows/web-build-deploy.yaml`
 
-**What it does:** detects the repo via `gh` (`nameWithOwner` + numeric `repository_id`), reads the
-manifest's `deploy:` block for `ref`/`environment` (default `refs/heads/main`), calls the provisioner
-to render the workflows and write the deploy **binding tags** (`ao-deploy-repo-id`, `ao-deploy-ref`,
-`ao-deploy-environment`) onto the project resource group, then writes the workflow files and **sets
-the GitHub repository secrets and variables for you** via `gh`. If `gh` is missing/unauthenticated it
+**What it does:** detects the repo via `gh`, reads the manifest's `deploy:` block for
+`ref`/`environment` (default `refs/heads/main`), then renders the workflow files, enrolls the repo
+with the provisioner, and **sets the GitHub repository secrets and variables for you** via `gh`. If `gh` is missing/unauthenticated it
 prints the `gh secret set` / `gh variable set` commands instead.
 
 **Prerequisites:** `gh` installed and authenticated; run inside the git repo with a GitHub remote.
@@ -305,18 +306,19 @@ stale.
 ```bash
 amplifier-online config           # 1. Set global config (once)
 # Browser auth happens automatically when needed
-# Build and push images to ACR    # 2. Build and push (outside CLI, for container stacks)
-amplifier-online init             # 3. Scaffold manifest
-# Edit amplifier-online.yaml      # 4. Set images/ports/resources
-amplifier-online up --dry-run     # 5. Preview
-amplifier-online up               # 6. Deploy
-amplifier-online status           # 7. Check
+amplifier-online init             # 2. Scaffold manifest (fills in ACR image URIs)
+# Edit amplifier-online.yaml      # 3. Set ports/resources
+amplifier-online up --dry-run     # 4. Preview
+amplifier-online up               # 5. Provision Azure resources
+amplifier-online cicd create      # 6. Generate deploy workflows (container stacks)
+git add .github/workflows/ && git commit -m "add deploy workflows" && git push   # 7. CI builds → ghcr → provisioner imports into ACR → deploys
+amplifier-online status           # 8. Check
 ```
 
 ### Subsequent deployments
 ```bash
-# Rebuild and push image to ACR (for container stacks)
-amplifier-online up               # Re-deploy (idempotent)
+# For container stacks: git push — CI rebuilds the image and the provisioner redeploys it.
+amplifier-online up               # For infra/manifest changes (idempotent)
 ```
 
 ### Switching stacks

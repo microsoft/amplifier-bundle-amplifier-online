@@ -94,25 +94,26 @@ Available deployment stacks:
 ### Repo prerequisites (MUST verify before `amplifier-online up`)
 
 1. **Dockerfiles exist** — one Dockerfile per planned container. The `web-app-aca` stack does
-   NOT build images; it deploys pre-built images from ACR. If Dockerfiles don't exist or
-   images haven't been built and pushed, the deployment will fail to pull the image.
+   NOT build images; CI builds them and the provisioner imports them into ACR. If Dockerfiles
+   don't exist, the deploy workflow has nothing to build and the deployment can't pull an image.
 
    Use `glob` to verify:
    ```
    glob("**/Dockerfile*")
    ```
 
-2. **Images are in ACR** — all `image:` values in the manifest MUST use ACR format:
+2. **Images use ACR format** — all `image:` values in the manifest MUST use ACR format:
    ```
    <acr-name>.azurecr.io/<project>-<service>:<tag>
    ```
-   Docker Hub images (`nginx:latest`, `python:3.11`) will fail because the Container Apps
-   Environment is not configured to pull from Docker Hub. ACR credentials are injected by
-   the platform automatically.
+   This is where the provisioner lands the imported image (`amplifier-online init` fills it in).
+   Docker Hub images (`nginx:latest`, `python:3.11`) and ghcr refs will fail because the Container
+   Apps Environment pulls only from ACR; ACR credentials are injected by the platform automatically.
 
-3. **Build → Push sequence understood** — images must be built and pushed to ACR BEFORE
-   running `amplifier-online up`. The CLI/service does not build images; it deploys whatever
-   tag is in the manifest at the time of `up`. Use `az acr build` or Docker push directly.
+3. **Image delivery is via push-to-deploy** — you do NOT build and push to the shared ACR by hand
+   (no account has push access; a manual `docker push` returns `UNAUTHORIZED`). `amplifier-online
+   cicd create` generates GitHub Actions workflows; on `git push` the workflow builds your image,
+   pushes it to your own ghcr.io, and the provisioner imports it into ACR and rolls the deployment.
 
 4. **Health endpoints exist** — each container MUST expose `/health` that returns 200 OK.
 
@@ -201,7 +202,7 @@ nginx reverse-proxy hop, which drops the header unless you set it explicitly.
 - **Authentication:** EasyAuth on SWA frontend (login required, always enforced); JWT middleware on backend API (token validation). Two Entra registrations: `ao-{project}-client` (frontend login client) and `ao-{project}-api` (backend audience `api://{apiClientId}`, exposes `access_as_user` + APIM)
 - **Observability:** Application Insights (workspace-based)
 
-> **Resource access (awa-specific):** all data resources are keyless on this stack — the backend's managed identity is granted the access each one needs via platform-RG modules, so no key or password is injected. Cosmos (Data Contributor role + per-project database), Redis (access-policy assignment), **Storage** (Storage Blob Data Contributor via `_shared/storage-role.bicep`), Cognitive Services (Cognitive Services User), and **Postgres** (Entra auth — a per-app login is created for the backend's identity; `DB_HOST`/`DB_NAME`/`DB_USER` injected, no password — connect with an Entra token). (Injected variable names: see `manifest-schema.md`.)
+> **Resource access (awa-specific):** all data resources are keyless on this stack — the backend's managed identity is granted the access each one needs, so no key or password is injected. Cosmos (Data Contributor role + per-project database), Redis (access-policy assignment), **Storage** (Storage Blob Data Contributor), Cognitive Services (Cognitive Services User), and **Postgres** (Entra auth — a per-app login is created for the backend's identity; `DB_HOST`/`DB_NAME`/`DB_USER` injected, no password — connect with an Entra token). (Injected variable names: see `manifest-schema.md`.)
 
 ### Best for
 
@@ -214,7 +215,7 @@ nginx reverse-proxy hop, which drops the header unless you set it explicitly.
 
 **Backend:**
 1. Dockerfile exists for backend container
-2. Image pushed to ACR
+2. Image delivered via push-to-deploy (`amplifier-online cicd create` → `git push` → ghcr → provisioner imports into ACR); not pushed to ACR by hand
 3. Health endpoint at `/health` returns 200 OK
 
 **Frontend:**
@@ -525,23 +526,27 @@ frontend:
 ### Repo prerequisites (MUST verify before `amplifier-online up`)
 
 1. **Dockerfile exists** -- one Dockerfile for the API container. The `internal-service-aca` stack
-   does NOT build images; it deploys pre-built images from ACR. If the Dockerfile doesn't exist or
-   the image hasn't been built and pushed, the deployment will fail to pull the image.
+   does NOT build images; CI builds the image and the provisioner imports it into ACR. If the
+   Dockerfile doesn't exist, the deploy workflow has nothing to build and the deployment can't
+   pull an image.
 
    Use `glob` to verify:
    ```
    glob("**/Dockerfile*")
    ```
 
-2. **Image is in ACR** -- the `image:` value in the manifest MUST use ACR format:
+2. **Image uses ACR format** -- the `image:` value in the manifest MUST use ACR format:
    ```
    <acr-name>.azurecr.io/<project>-<service>:<tag>
    ```
-   Docker Hub images will fail because the Container Apps Environment is not configured to pull
-   from Docker Hub. ACR credentials are injected by the platform automatically.
+   This is where the provisioner lands the imported image. Docker Hub and ghcr refs will fail
+   because the Container Apps Environment pulls only from ACR; ACR credentials are injected by the
+   platform automatically.
 
-3. **Build -> Push sequence understood** -- the image must be built and pushed to ACR BEFORE
-   running `amplifier-online up`. The CLI/service does not build images.
+3. **Image delivery is via push-to-deploy** -- you do NOT build and push to the shared ACR by hand
+   (no account has push access). `amplifier-online cicd create` generates a GitHub Actions
+   workflow; on `git push` it builds your image, pushes it to your own ghcr.io, and the provisioner
+   imports it into ACR and rolls the deployment.
 
 4. **Health endpoint exists** -- the container MUST expose `/health` that returns 200 OK.
 
