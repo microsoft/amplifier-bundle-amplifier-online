@@ -680,12 +680,16 @@ without needing to declare them in `services.<name>.env`.
 
 | Variable | Type | Value | Use Case |
 |----------|------|-------|----------|
-| `AZURE_CLIENT_ID` | string | Entra app registration client ID | MSAL.js frontend auth, JWT middleware audience validation |
+| `AZURE_CLIENT_ID` | string | The `-client` (login) registration id | MSAL.js frontend auth (SPA sign-in) |
+| `AZURE_API_CLIENT_ID` | string | The `-api` registration id | Backend JWT middleware audience validation |
 | `AZURE_TENANT_ID` | string | Entra tenant ID | MSAL.js configuration, JWT middleware JWKS endpoint |
 
-**Note:** These are injected for all services that have auth enabled. Web services use them for
-EasyAuth configuration. API services use them for JWT middleware configuration (audience =
-`api://{AZURE_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AZURE_TENANT_ID}/...`).
+**Note:** These are injected for the services that need them. Web/frontend services get
+`AZURE_CLIENT_ID` (the login client) for EasyAuth/MSAL.js. API/backend services get
+`AZURE_API_CLIENT_ID` (the `-api` audience) for JWT middleware configuration (audience =
+`api://{AZURE_API_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AZURE_TENANT_ID}/...`).
+The backend audience uses the non-reserved `AZURE_API_CLIENT_ID` name because azure-identity reads
+`AZURE_CLIENT_ID` as a user-assigned managed-identity client id, which would break keyless auth.
 
 **Static Web App stacks (`static-web-app`, `web-app-awa` frontend):** The Bicep template injects
 `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID` as SWA app settings (note the `VITE_` prefix).
@@ -881,7 +885,7 @@ when each variable becomes available prevents common configuration mistakes.
 |-------|--------------|----------------------|
 | **Build time** (Docker build) | Image is built. No platform vars exist yet -- the Entra app registration hasn't been created. | None -- do NOT bake auth config into images |
 | **Deploy time** (`amplifier-online up`) | Platform provisions Azure resources and creates the Entra app registration. | Not yet available to your code |
-| **Runtime** (container start) | Platform injects `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as container environment variables. | `os.environ["AZURE_CLIENT_ID"]`, `os.environ["AZURE_TENANT_ID"]` |
+| **Runtime** (container start) | Platform injects auth env vars — `AZURE_CLIENT_ID` (frontend login client) or `AZURE_API_CLIENT_ID` (backend JWT audience), plus `AZURE_TENANT_ID`. | backend: `os.environ["AZURE_API_CLIENT_ID"]`; frontend: `AZURE_CLIENT_ID` |
 
 **Key insight:** Container images must be environment-agnostic. Auth configuration is injected at
 runtime, which is why the MSAL guide prescribes the `/auth-config.json` pattern -- `entrypoint.sh`
