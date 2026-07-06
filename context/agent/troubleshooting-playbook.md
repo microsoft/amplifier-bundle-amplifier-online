@@ -24,20 +24,23 @@ Environment is configured to pull only from the shared ACR; Docker Hub pulls fai
 registry credentials are configured.
 
 **Fix:**
-1. Build the image locally:
-   ```bash
-   docker build -t amplifieronlinecr.azurecr.io/<project>-<service>:<tag> ./path-to-dockerfile/
+1. Change the `image:` to the platform ACR reference (this is where the provisioner lands your
+   image; `amplifier-online init` fills it in for you):
+   ```yaml
+   services:
+     api:
+       image: amplifieronlinecr.azurecr.io/<project>-<service>:latest
    ```
-2. Log in to ACR:
+2. Deliver the image via **push-to-deploy** — you do **not** `docker push` to the shared ACR
+   yourself (no account has push access; a manual push returns `UNAUTHORIZED`):
    ```bash
-   az acr login --name amplifieronlinecr
+   amplifier-online cicd create      # generate .github/workflows/
+   git add .github/workflows/ && git commit -m "add deploy workflows" && git push
    ```
-3. Push to ACR:
-   ```bash
-   docker push amplifieronlinecr.azurecr.io/<project>-<service>:<tag>
-   ```
-4. Update `amplifier-online.yaml` to use the ACR reference
-5. Re-run `amplifier-online up`
+   The workflow builds your image, pushes it to your own ghcr.io, and the provisioner imports it
+   into ACR and rolls the deployment.
+3. A third-party base image (e.g., `nginx`, `python:3.11-slim`) belongs in your **Dockerfile's**
+   `FROM` line — never as a service `image:` in `amplifier-online.yaml`.
 
 **Rule:** Every `image:` in `amplifier-online.yaml` MUST follow: `<acr-name>.azurecr.io/<project>-<service>:<tag>`
 
@@ -77,7 +80,7 @@ those requests.
 
 ---
 
-## Failure Mode 3: Missing Dockerfile / Image Not Pushed to ACR
+## Failure Mode 3: ACR Image Doesn't Exist Yet (CI Hasn't Delivered It)
 
 **Symptom:** `amplifier-online up` fails with:
 ```
@@ -91,25 +94,34 @@ manifest unknown: manifest tagged by "latest" is not found
 # Check Dockerfiles exist
 find . -name "Dockerfile*" -type f
 
-# Check if image exists in ACR
+# Check whether the image has been delivered to ACR yet
 az acr repository show-tags --name amplifieronlinecr --repository my-project-api
+
+# Check whether the deploy workflow has run and succeeded
+gh run list --workflow api-build-deploy.yaml
 ```
 
-**Root cause:** The manifest references an ACR image that doesn't exist yet — the image
-was never built and pushed. Amplifier Online deploys images; it does not build them.
+**Root cause:** The manifest references an ACR image that doesn't exist yet because CI hasn't
+built and delivered it. Amplifier Online does not build images, and you do **not** push to the
+shared ACR by hand — no account has push access, so a manual `docker push` returns `UNAUTHORIZED`.
+Images reach ACR only via **push-to-deploy**: your GitHub Actions workflow builds the image, pushes
+it to your own ghcr.io, and the provisioner imports it into ACR. On a first deploy this is expected
+until the first workflow run completes.
 
 **Fix:**
-1. Ensure a Dockerfile exists for each container
-2. Build the image:
+1. Ensure a Dockerfile exists for each container.
+2. Generate and commit the deploy workflows, then push to trigger CI:
    ```bash
-   docker build -t amplifieronlinecr.azurecr.io/<project>-<service>:latest ./path/
+   amplifier-online cicd create
+   git add .github/workflows/ && git commit -m "add deploy workflows" && git push
    ```
-3. Authenticate and push:
+3. The workflow builds, pushes to ghcr.io, and the provisioner imports into ACR and rolls the
+   deployment. Watch it:
    ```bash
-   az acr login --name amplifieronlinecr
-   docker push amplifieronlinecr.azurecr.io/<project>-<service>:latest
+   gh run watch
    ```
-4. Re-run `amplifier-online up`
+4. If a workflow already exists but no image landed, inspect the Actions run for a build/push
+   failure (`gh run view --log-failed`) or a provisioner 401 (see the OIDC rows in `cicd-guide.md`).
 
 ---
 
@@ -218,31 +230,6 @@ or the shared infrastructure has a constraint on per-project resource counts.
 
 ---
 
-## Failure Mode 7: Dockerfile Build Failure (in CI/CD)
-
-**Symptom:** GitHub Actions workflow fails at the build step:
-```
-ERROR [2/4] RUN pip install -r requirements.txt
-#8 1.234 ERROR: Could not find a version that satisfies the requirement
-docker build exited with code 1
-```
-
-**Root cause:** The Dockerfile or application dependencies have an issue. This is not an
-Amplifier Online problem — it's an application build issue.
-
-**Diagnostic:**
-```bash
-docker build -t test-build . --no-cache    # Reproduce locally
-```
-
-**Fix:**
-1. Reproduce the build failure locally with `docker build`
-2. Fix the Dockerfile or dependency issue
-3. Verify with a local build before pushing
-4. Once local build succeeds, push to ACR and redeploy
-
----
-
 ## Failure Mode 8: Stale / Wrong Image Tag
 
 **Symptom:** App deploys but runs old code:
@@ -257,19 +244,19 @@ amplifier-online status    # Check running revision
 grep "image:" amplifier-online.yaml    # Check what tag is configured
 ```
 
-**Root cause:** The manifest uses `:latest` tag but the new image wasn't pushed, or a SHA
-tag was updated but the manifest still references the old SHA.
+**Root cause:** A new image was never built and delivered (no `git push` triggered the CI/CD
+workflow), or a SHA tag was updated but the manifest still references the old SHA.
 
 **Fix:**
-1. Verify the new image is in ACR:
+1. Verify what's in ACR:
    ```bash
    az acr repository show-tags --name amplifieronlinecr --repository <image-name>
    ```
-2. Push the updated image to ACR
-3. For `:latest` tags — `latest` is resolved at pull time; re-running `amplifier-online up`
-   will pick up the newly pushed `latest`
-4. Consider using SHA-based tags in CI/CD (generated by `amplifier-online cicd create`) for
-   deterministic deployments
+2. Commit and `git push` your changes — CI rebuilds the image (tagged with the new commit SHA),
+   pushes it to ghcr.io, and the provisioner imports it into ACR and rolls a new revision. You
+   don't push to ACR by hand; `git push` is what produces a new image.
+3. For `:latest` tags — `latest` is resolved at pull time, so the next workflow run replaces it.
+4. The generated CI/CD workflow already deploys SHA-based tags for deterministic deployments.
 
 ---
 
@@ -469,11 +456,10 @@ Common causes:
 4. A backend API service is always given a `-api` registration, so `AZURE_API_CLIENT_ID` (the
    `-api` appId) and `AZURE_TENANT_ID` are injected — confirm the middleware reads them.
 
-5. Rebuild, push, and redeploy:
+5. Commit and push — CI rebuilds the image and the provisioner redeploys it (you don't
+   `docker push` to the platform ACR by hand):
    ```bash
-   docker build -t amplifieronlinecr.azurecr.io/<project>-api:latest ./api/
-   docker push amplifieronlinecr.azurecr.io/<project>-api:latest
-   amplifier-online up
+   git add . && git commit -m "add JWT middleware" && git push
    ```
 
 **Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
@@ -743,33 +729,6 @@ producer's `-api` to already exist.
 
 ---
 
-## Failure Mode 19: `AADSTS7002381` at an Azure login step (retired model — regenerate workflows)
-
-**Applies to:** Repos whose `.github/workflows/` still contain the **old** Azure-OIDC deploy jobs
-(an `azure/login` step plus `az acr login` / `az containerapp update`).
-
-**Symptom:** A deploy job fails at an Azure login step:
-```
-AADSTS7002381: Federated identity credentials issued by
-'https://token.actions.githubusercontent.com/' ... must contain the enterprise claim ...
-```
-
-**Root cause:** The retired container CI/CD model logged in to **Azure AD** via a per-repo Entra
-federated credential, which the corporate tenant only honors for repos in a Microsoft-linked GitHub
-enterprise org. The **current** push-to-deploy model does not log in to Azure AD at all — the deploy
-job mints a GitHub OIDC token for the **provisioner's** audience and POSTs to the provisioner, which
-validates the token itself (issuer / audience / `repository_id` / `ref`). There is **no
-`enterprise`-claim requirement and no enterprise-org constraint** anymore.
-
-**Fix:** Regenerate the workflows so they use the current model:
-```bash
-amplifier-online cicd create
-```
-If a deploy still fails with a **401 at the provisioner** (not Azure AD), that's a different problem —
-see the OIDC / `AO_PROVISIONER_AUDIENCE` rows in `cicd-guide.md`.
-
----
-
 ## Failure Mode 20: `ServiceTreeInvalid` on App Registration Creation
 
 **Symptom:** `amplifier-online up` fails during app-registration creation with `ServiceTreeInvalid`.
@@ -783,61 +742,37 @@ your service's Service Tree entry, or from the platform operator.
 
 ---
 
-## Failure Mode 21: `AuthConfigInvalidRequest` During Deploy (Token Store)
+## Failure Mode 21: `GET /.auth/me` Returns 404 on ACA (Expected — Not a Bug)
 
-**Symptom:** Bicep/EasyAuth deployment fails with `AuthConfigInvalidRequest`.
+**Symptom:** On an ACA web service, `GET /.auth/me` returns **404**, so code that reads the login
+identity from it breaks.
 
-**Root cause:** The Container Apps `2024-03-01` auth API requires a blob storage SAS URL
-(`SasUrlSettingName`) whenever a token store is configured. The token store needs a storage
-account with `allowSharedKeyAccess` enabled, which tenant policy disables — so the platform omits
-the token-store block entirely (it is removed, not set to `enabled: false`).
-
-**Fix:** This is handled by the platform; if you see it on a customized stack, remove the
-`tokenStore` block from the `authConfigs` resource. **Note:** with no token store, `GET /.auth/me`
-returns **404 — this is the expected, healthy state**, not a bug. EasyAuth still injects the
-`X-MS-CLIENT-PRINCIPAL*` identity headers, and APIs read identity from the validated JWT (see
-`authorization-guide.md`). Do not "fix" a 404 from `/.auth/me`.
+**Fix:** Don't read identity from `/.auth/me` — it's a token-store feature the platform runs without
+(tenant policy disables the storage the token store needs). EasyAuth still injects the
+`X-MS-CLIENT-PRINCIPAL*` headers on the web service, and APIs read identity from the validated JWT
+(see `authorization-guide.md`). (If you instead hit `AuthConfigInvalidRequest` while deploying a
+*customized* stack, remove the `tokenStore` block from the `authConfigs` resource — the platform
+already omits it.)
 
 ---
 
-## Failure Mode 22: `ObjectConflict` on App Registration Creation
+## Failure Mode 22: Transient Provisioning Errors (Self-Healing — Retry)
 
-**Symptom:** App-registration creation fails with `ObjectConflict`.
+**Symptom:** `amplifier-online up` fails mid-run with one of:
+- `ObjectConflict` on app-registration creation
+- a permission / "not found" error referencing the service principal right after the registration is created
+- `Response ended prematurely`
 
-**Root cause:** Either a concurrent provisioner run is creating the same registration, or a
-previously deleted registration with the same display name lingers as a soft-deleted tombstone
-(Entra retains them for 30 days).
+**Root cause:** All three are transient — a concurrent run or soft-deleted tombstone, Entra
+service-principal replication lag to ARM, or the provisioner restarting mid-stream. The provisioner
+already polls/retries for these internally.
 
-**Fix:** Usually transient — the provisioner polls for the winning registration and restores from
-deleted items automatically. **Retry the command.** If it persists, check for a tombstone:
+**Fix:** **Retry the command** — `up` is idempotent, so a re-run resumes safely. If `ObjectConflict`
+persists, a soft-deleted registration may be lingering (Entra keeps tombstones 30 days) — find it,
+then restore or permanently delete it and retry:
 ```bash
 az rest --method GET --uri "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.application?\$filter=displayName eq 'ao-<project>-api'"
 ```
-Restore it, or permanently delete it, then retry.
-
----
-
-## Failure Mode 23: Bicep Permission / "Not Found" Error Right After App Creation
-
-**Symptom:** The app registration is created, but the immediately following Bicep deployment fails
-with a permission or "not found" error that references the service principal.
-
-**Root cause:** Entra service-principal replication lag. The SP exists in Graph but has not yet
-propagated to ARM.
-
-**Fix:** Transient — the provisioner polls (up to 15 times, 3s apart). If it surfaces to you,
-**wait 30–60 seconds and retry** `amplifier-online up` (idempotent).
-
----
-
-## Failure Mode 24: `amplifier-online up` "Response ended prematurely"
-
-**Symptom:** `amplifier-online up` drops mid-deployment with `Response ended prematurely`.
-
-**Root cause:** The provisioner Container App restarted during a revision swap while streaming the
-deployment, cutting the SSE connection.
-
-**Fix:** **Retry the command** — all operations are idempotent, so a re-run resumes/repeats safely.
 
 ---
 
@@ -1068,6 +1003,32 @@ SDK/REST calls with the injected `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_R
 
 ---
 
+## Failure Mode 37: Azure Speech REST Call Returns 404 on the Multi-Service Endpoint
+
+**Symptom:** Speech-to-text (or text-to-speech) REST calls to the injected `SPEECH_ENDPOINT` /
+`COGNITIVE_SERVICES_ENDPOINT` return **404 Resource not found**, even though the host is correct and the
+managed identity has the Cognitive Services User role.
+
+**Cause:** `cognitive-services` provisions a **multi-service** Azure AI Services account, so the injected
+endpoint is the multi-service host `https://<name>.cognitiveservices.azure.com/` — **not** a Speech-only
+regional host (`https://<region>.stt.speech.microsoft.com`, which needs no prefix). On a multi-service
+endpoint the Speech REST paths must be prefixed with `/stt/` (recognition) or `/tts/` (synthesis):
+
+```
+# 404 — un-prefixed path on a multi-service endpoint:
+https://<name>.cognitiveservices.azure.com/speech/recognition/conversation/cognitiveservices/v1
+# 200 — with the /stt/ prefix:
+https://<name>.cognitiveservices.azure.com/stt/speech/recognition/conversation/cognitiveservices/v1
+```
+
+**Fix:** Prefer the **Speech SDK** (`SpeechConfig` + an `aad#{SPEECH_RESOURCE_ID}#{token}` auth token,
+token scope `https://cognitiveservices.azure.com/.default`) — it builds the correct paths automatically.
+If you must call REST directly, add the `/stt/` (or `/tts/`) prefix and authenticate with
+`Authorization: Bearer <token>` (same scope). The account is keyless (`disableLocalAuth: true`), so
+there is no `Ocp-Apim-Subscription-Key`.
+
+---
+
 ## AADSTS Error Code → Cause Quick Table
 
 When the only signal is an `AADSTS` code in the browser console or CLI output:
@@ -1078,7 +1039,7 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS9002326` | SPA redirect URI registered under **Web** platform; MSAL needs **SPA** type | Failure Mode 29 |
 | `AADSTS900144` | Empty/missing `client_id` — a build-time var was not baked into the bundle | Build-Time Config Inlining (below) |
 | `AADSTS700016` | Application not found for the client id — stale/wrong client id in config or GitHub vars | Failure Mode 17 |
-| `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `cicd create` | Failure Mode 19 |
+| `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `amplifier-online cicd create` | `cicd-guide.md` |
 | `AADSTS50105` | User not assigned to a role; or nested/mail-enabled group | Failure Mode 9, Failure Mode 30 |
 | `AADSTS53000` | Conditional Access — device not compliant/managed | Sign in from a compliant device |
 

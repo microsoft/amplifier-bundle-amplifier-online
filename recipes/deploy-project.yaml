@@ -2,6 +2,22 @@
 # CHANGELOG
 # =============================================================================
 #
+# v1.0.2 (2026-07-06):
+#   - MODEL FIX: Reordered stages to match push-to-deploy. Images/SWA content
+#     reach Azure via CI/CD, not a manual `docker push`, so for container and
+#     Static Web App stacks the app is NOT live after `up`.
+#     * BEFORE: deploy (up) -> verify (health check) -> *optional* CI/CD. The
+#       health check ran before any image existed in ACR, so it always failed
+#       for container stacks until the (optional, easily-skipped) CI/CD stage.
+#     * AFTER: deploy (up, provisions infra) -> CI/CD setup (REQUIRED for
+#       container/SWA stacks; generates workflows, pushes, and `gh run watch`es
+#       the first run so the image is imported into ACR) -> verify (health check
+#       now runs against a live image). `vm` is exempt (live after `up`).
+#     * Stage 6 "prepare-images" already reworked to readiness-only (no manual
+#       push). Context threading unchanged: deploy->deployment_result,
+#       cicd-setup->cicd_status, verify->verification_status; write-context
+#       still consumes all three.
+#
 # v1.0.1 (2026-06-26):
 #   - BUGFIX: Template variables never substituted at runtime (resolved empty),
 #     including cross-stage `output` values like {{project_profile}} and
@@ -60,9 +76,9 @@
 name: deploy-project
 description: >
   Guided end-to-end deployment of a project to Amplifier Online. Analyzes your project,
-  recommends the right stack, verifies prerequisites, guides manifest creation, container
-  builds, deployment, and optional CI/CD setup. Multi-stage with approval gates at critical
-  decision points.
+  recommends the right stack, verifies prerequisites, guides manifest creation, infrastructure
+  provisioning, CI/CD-driven image delivery, and verification. Multi-stage with approval gates
+  at critical decision points.
 version: "1.0.0"
 author: "Amplifier Online"
 tags: ["amplifier-online", "deployment", "azure", "staged", "approval-gates"]
@@ -357,61 +373,62 @@ stages:
         timeout: 900
 
   # ---------------------------------------------------------------------------
-  # Stage 6: Build and push container images to ACR
+  # Stage 6: Prepare container images (delivered via push-to-deploy, not manual push)
   # ---------------------------------------------------------------------------
-  - name: "build-push"
+  - name: "prepare-images"
     approval:
       required: true
       prompt: |
-        Build and push step summary:
+        Image-readiness summary:
 
         {{build_status}}
 
-        Approve once container images are pushed to ACR (or if the stack is
-        static-web-app, which has no images to push) to proceed to deployment.
-        Deny if the images are not yet built and pushed.
+        Approve once each container has a Dockerfile and its manifest `image:` uses the ACR
+        reference (or if the stack is static-web-app, which has no container images) to proceed
+        to deployment. Actual image delivery happens via CI/CD (Stage 9) — no manual `docker push`.
+        Deny if any Dockerfile is missing or an `image:` is not in ACR format.
     steps:
-      - id: "build-and-push"
+      - id: "prepare-images"
         type: "agent"
         agent: "amplifier-online:deployment-guide"
         prompt: |
-          STAGE: Build and Push (Container stacks only)
+          STAGE: Prepare Images (Container stacks only)
 
           Selected stack (from the stack-selection stage):
           {{stack_selection}}
+
+          IMPORTANT: You do NOT build and push images to the shared ACR by hand. No account has
+          push access to it (a manual `docker push amplifieronlinecr.azurecr.io/...` returns
+          UNAUTHORIZED). Images are delivered by push-to-deploy: `amplifier-online cicd create`
+          generates GitHub Actions workflows; on `git push` each workflow builds the image, pushes
+          it to the user's own ghcr.io, and the provisioner imports it into ACR and rolls the
+          deployment. CI/CD setup is Stage 9 — for container stacks it is REQUIRED to get an image
+          into ACR, not optional.
 
           If the selected stack is static-web-app:
             SKIP this stage. The static-web-app stack doesn't use container images;
             GitHub Actions handles builds. Tell the user this stage is skipped and that
             they can approve the gate to continue.
 
-          Otherwise (container stacks: web-app-aca, internal-service-aca, web-app-awa):
+          Otherwise (container stacks: web-app-aca, internal-service-aca, web-app-awa),
+          verify readiness (do NOT push anything):
+            1. Read the manifest. For each service in the `services:` map, confirm a Dockerfile
+               exists at the expected path (use glob "**/Dockerfile*").
+            2. Confirm each service `image:` uses the ACR format
+               `<acr-name>.azurecr.io/<project>-<service>:<tag>` (Docker Hub or ghcr refs will not
+               pull). `amplifier-online init` fills these in.
+            3. Optionally have the user build locally just to confirm the image builds
+               (`docker build -t <image> <dir>`) — this is a local sanity check only, never a push.
 
-          Read the manifest to extract image names and Dockerfile paths.
-
-          For each service defined in the `services:` map:
-            1. Generate the build command:
-               docker build -t [image-from-manifest] [dockerfile-dir]
-
-            2. Generate ACR login and push:
-               az acr login --name [acr-name-from-config]
-               docker push [image-from-manifest]
-
-          Present the full sequence:
+          Explain to the user how the image will actually reach ACR:
           ```bash
-          # Backend
-          docker build -t amplifieronlinecr.azurecr.io/my-project-api:latest ./api
-          az acr login --name amplifieronlinecr
-          docker push amplifieronlinecr.azurecr.io/my-project-api:latest
-
-          # Frontend (if container type)
-          docker build -t amplifieronlinecr.azurecr.io/my-project-web:latest ./web
-          docker push amplifieronlinecr.azurecr.io/my-project-web:latest
+          # After `amplifier-online up` provisions the infra (next stage), CI/CD delivers the image:
+          amplifier-online cicd create      # generate .github/workflows/
+          git add .github/workflows/ && git commit -m "add deploy workflows" && git push
+          # → the workflow builds, pushes to ghcr.io, and the provisioner imports into ACR & deploys
           ```
 
-          Ask user: "Run these commands in your terminal, then confirm when both images are pushed."
-
-          Summarize the build/push status at the end of your response.
+          Summarize image readiness (Dockerfiles present? image refs valid?) at the end of your response.
         output: "build_status"
         timeout: 600
 
@@ -426,8 +443,10 @@ stages:
 
         {{deployment_result}}
 
-        Approve to confirm the deployment is complete and proceed to verification.
-        Deny if the deployment did not complete successfully.
+        This provisions the Azure infrastructure. For container and Static Web App stacks
+        the app is not live yet — the image/content is delivered by CI/CD in the next stage.
+        Approve to confirm infrastructure provisioning is complete and proceed to CI/CD setup.
+        Deny if provisioning did not complete successfully.
     steps:
       - id: "deploy-project"
         type: "agent"
@@ -468,7 +487,98 @@ stages:
         timeout: 900
 
   # ---------------------------------------------------------------------------
-  # Stage 8: Health check and troubleshooting
+  # Stage 8: CI/CD setup -- delivers the image/content to Azure
+  # ---------------------------------------------------------------------------
+  # For container and Static Web App stacks the app is NOT live after `up`:
+  # `up` provisions the infra, but the container image (or SWA content) reaches
+  # Azure only when the generated GitHub Actions workflow runs. So CI/CD setup
+  # comes BEFORE verification and is required to make the app live.
+  - name: "cicd-setup"
+    approval:
+      required: true
+      prompt: |
+        Infrastructure (from `amplifier-online up`) summary:
+
+        {{deployment_result}}
+
+        Next, CI/CD setup delivers the image/content to Azure. For container and
+        Static Web App stacks this is REQUIRED — the app has no running image until
+        the first workflow completes. Approve to generate the workflows, push, and
+        run the first deployment. (Deny only for stacks already live after `up`, e.g. `vm`.)
+    steps:
+      - id: "cicd-setup"
+        type: "agent"
+        agent: "amplifier-online:deployment-guide"
+        prompt: |
+          STAGE: CI/CD Setup -- this is how the image/content reaches Azure
+
+          Selected stack (from the stack-selection stage):
+          {{stack_selection}}
+
+          For container stacks (web-app-aca, internal-service-aca, web-app-awa) and
+          static-web-app, the previous `up` stage provisioned the infrastructure but did NOT
+          put a runnable image (or site content) in place. GitHub Actions delivers it: the
+          workflow builds and pushes to the user's own ghcr.io, and the provisioner imports the
+          image into ACR and rolls the deployment (SWA content deploys via the Static Web Apps
+          action). This stage is REQUIRED for those stacks — without it the container app has no
+          image and health checks will fail. (A `vm` deployment is already live after `up` and
+          needs no image delivery — you may skip this stage.)
+
+          STEP 1: Generate workflows
+            Run: amplifier-online cicd create --dry-run
+            Show the preview:
+            ```
+            WORKFLOWS TO BE CREATED
+
+            [list generated workflow files]
+            ```
+            Then create them: amplifier-online cicd create
+
+          STEP 2: Confirm GitHub secrets/variables
+            Load @amplifier-online:context/agent/cicd-guide.md
+
+            `amplifier-online cicd create` already sets the repo secrets and variables via `gh`
+            (or prints `gh secret/variable set` commands if gh is unavailable). Confirm them:
+
+            If the selected stack is web-app-aca, internal-service-aca, or web-app-awa:
+              Container workflows need NO Azure secrets — deploys authenticate to the provisioner
+              via a GitHub OIDC token. Verify these repo variables are set (gh variable list):
+                - AO_PROVISIONER_URL
+                - AO_PROVISIONER_AUDIENCE
+                - AO_PROJECT_NAME
+
+            If the selected stack is web-app-awa or static-web-app:
+              For the Static Web App frontend, verify the secret:
+                - AZURE_STATIC_WEB_APPS_API_TOKEN
+              (Set automatically after the first `amplifier-online up`; if it was missing when you
+              first ran `cicd create`, re-run `amplifier-online cicd create`.)
+
+          STEP 3: Commit, push, and run the first deployment
+            ```bash
+            git add .github/workflows/
+            git commit -m "Add CI/CD workflows for the selected stack"
+            git push
+            ```
+            The push triggers the workflow. Wait for the first run to finish before verifying,
+            so the image/content is actually delivered:
+            ```bash
+            gh run watch
+            ```
+            If the run fails, load @amplifier-online:context/agent/troubleshooting-playbook.md,
+            map the build/push or provisioner error to a failure mode, and guide remediation
+            before proceeding.
+
+          IF the stack is `vm` (already live after `up`):
+            "CI/CD image delivery does not apply to the vm stack — skipping. Update software by
+            editing cloud-init and re-running `amplifier-online up`, or via Run Command."
+
+          Report whether CI/CD delivered the first deployment (workflow run succeeded) or was
+          skipped (e.g. `vm`) at the end of your response.
+        output: "cicd_status"
+        timeout: 900
+
+  # ---------------------------------------------------------------------------
+  # Stage 9: Health check and troubleshooting (after the image/content is live)
   # ---------------------------------------------------------------------------
   - name: "verify"
     steps:
@@ -484,12 +594,18 @@ stages:
           Deployment details (extract the deployment URL from here):
           {{deployment_result}}
 
+          CI/CD delivery status (the image/content should now be live):
+          {{cicd_status}}
+
           STEP 1: Check deployment status
             Run: amplifier-online status
 
             Parse output:
             - Are all containers/apps in "Running" state?
             - Any error messages?
+            If an app still shows no running revision, the CI/CD workflow may not have finished
+            delivering the image — re-check `gh run watch` from the previous stage before
+            treating this as a failure.
 
           STEP 2: Health check
             If the selected stack is a container stack (web-app-aca, internal-service-aca, web-app-awa):
@@ -513,81 +629,7 @@ stages:
             [pass] Status: All containers/apps running
             [pass] Health: <deployment-url>/health -> 200 OK
             [pass] Your app is live at: <deployment-url>
-
-            Next: Set up CI/CD for automatic deployments? (next stage)
             ```
-
-          Summarize whether the deployment is healthy at the end of your response.
-        output: "verification_status"
-        timeout: 600
-
-  # ---------------------------------------------------------------------------
-  # Stage 9: Optional GitHub Actions CI/CD setup
-  # ---------------------------------------------------------------------------
-  - name: "cicd-setup"
-    approval:
-      required: true
-      prompt: |
-        Verification summary:
-
-        {{verification_status}}
-
-        Approve to set up GitHub Actions CI/CD now, or deny to skip CI/CD setup.
-    steps:
-      - id: "cicd-setup"
-        type: "agent"
-        agent: "amplifier-online:deployment-guide"
-        prompt: |
-          STAGE: CI/CD Setup (Optional)
-
-          Selected stack (from the stack-selection stage):
-          {{stack_selection}}
-
-          Ask user: "Want to set up GitHub Actions for automatic deployments on push? (yes/skip)"
-
-          IF YES:
-            STEP 1: Generate workflows
-              Run: amplifier-online cicd create --dry-run
-
-              Show preview:
-              ```
-              WORKFLOWS TO BE CREATED
-
-              [list generated workflow files]
-              ```
-
-            STEP 2: Create workflows if user approves
-              Run: amplifier-online cicd create
-
-            STEP 3: Confirm GitHub secrets/variables
-              Load @amplifier-online:context/agent/cicd-guide.md
-
-              `amplifier-online cicd create` already sets the repo secrets and variables via `gh`
-              (or prints `gh secret/variable set` commands if gh is unavailable). Confirm them:
-
-              If the selected stack is web-app-aca, internal-service-aca, or web-app-awa:
-                Container workflows need NO Azure secrets — deploys authenticate to the provisioner
-                via a GitHub OIDC token. Verify these repo variables are set (gh variable list):
-                  - AO_PROVISIONER_URL
-                  - AO_PROVISIONER_AUDIENCE
-                  - AO_PROJECT_NAME
-
-              If the selected stack is web-app-awa or static-web-app:
-                For Static Web App, verify the secret:
-                  - AZURE_STATIC_WEB_APPS_API_TOKEN
-
-                Set automatically after the first `amplifier-online up`; if it was missing when you
-                first ran `cicd create`, re-run `amplifier-online cicd create`.
-
-            STEP 4: Commit workflows
-              ```bash
-              git add .github/workflows/
-              git commit -m "Add CI/CD workflows for the selected stack"
-              git push
-              ```
-
-          IF SKIP:
-            "No problem. You can set up CI/CD later with: amplifier-online cicd create"
 
           FINAL SUMMARY:
             ```
@@ -596,17 +638,17 @@ stages:
             Project: [name]
             Stack: [selected stack]
             URL: [deployment url]
-            CI/CD: [Configured | Skipped]
+            CI/CD: [Configured | Skipped (vm)]
 
             Next steps:
             - Visit the deployment URL to see your app
             - Monitor with: amplifier-online status
             - View logs with: amplifier-online logs
-            - If CI/CD was configured, push to main branch to trigger automatic deployments
+            - Push to your default branch to trigger automatic redeployments
             ```
 
-          Report whether CI/CD was configured or skipped at the end of your response.
-        output: "cicd_status"
+          Summarize whether the deployment is healthy at the end of your response.
+        output: "verification_status"
         timeout: 600
 
   # ---------------------------------------------------------------------------

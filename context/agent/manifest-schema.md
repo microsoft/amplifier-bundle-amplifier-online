@@ -179,8 +179,11 @@ All container images MUST reference the shared Azure Container Registry:
 
 The `acr_name` comes from `~/.amplifier-online/config.yaml`. Default is `amplifieronlinecr`.
 
-Images must be pushed to ACR BEFORE running `amplifier-online up`. The service does not
-build images — it deploys whatever tag is currently in the registry.
+The service does not build images. Images reach ACR via **push-to-deploy**: `amplifier-online
+cicd create` generates GitHub Actions workflows that build your image, push it to your own
+ghcr.io, and hand it to the provisioner, which imports it into ACR. You do **not** `docker push`
+to the shared ACR yourself (no account has push access). The `image:` field still names the ACR
+ref — that's where the provisioner lands the imported image.
 
 ### `services.<name>.port`
 - **Required for each service.**
@@ -296,7 +299,6 @@ appropriate because only one process ever writes.
   section in `stacks-reference.md`).
 - `cloud_init` — path (relative to `amplifier-online.yaml`) to a cloud-init document. The CLI reads
   its **contents** and uploads them; the VM runs it on first boot to install/configure software.
-  (The CLI inlines the file at `up` time; the raw path is not what reaches the VM.)
 - `data_disk_gib` — optional persistent data disk in GiB (`0` = none). Survives VM config changes
   and re-runs of `up`.
 - `static_private_ip` — optional fixed private IP in `10.100.4.0/24` (`""` = dynamic). Use it for a
@@ -357,7 +359,11 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
   injected as `COGNITIVE_SERVICES_ENDPOINT`, `COGNITIVE_SERVICES_REGION`, `COGNITIVE_SERVICES_RESOURCE_ID`
   (plus `SPEECH_ENDPOINT` / `SPEECH_REGION` / `SPEECH_RESOURCE_ID` aliases for Speech-SDK ergonomics —
   the resource ID is needed for text-to-speech / speaker recognition) —
-  no key, access is via the container's managed identity (Cognitive Services User role)
+  no key, access is via the container's managed identity (Cognitive Services User role).
+  Auth with a `DefaultAzureCredential` bearer token, scope `https://cognitiveservices.azure.com/.default`
+  (the Speech SDK wants it as `aad#{SPEECH_RESOURCE_ID}#{token}`). Because the endpoint is the
+  **multi-service** host, raw Speech REST calls need a `/stt/` (recognition) or `/tts/` (synthesis)
+  path prefix, or they 404 — the Speech SDK handles this
 
 ### `deploy` (push-to-deploy binding)
 - **Optional.** Consumed by `amplifier-online cicd create` to authorize which GitHub repo/ref/environment
@@ -595,7 +601,7 @@ resources:
 | Volume | Optional per-service: `mount_path`, `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
-| Build/push | Must be done BEFORE `amplifier-online up` |
+| Build/push | Handled by CI/CD (`amplifier-online cicd create` → `git push` → ghcr → provisioner imports into ACR); never a manual `docker push` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
 
 ### `internal-service-aca`
@@ -609,7 +615,7 @@ resources:
 | Volume | Optional per-service: `mount_path`, `size_gib` |
 | Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
 | Dockerfiles | Must exist for the API service (not part of manifest, but prerequisite) |
-| Build/push | Must be done BEFORE `amplifier-online up` |
+| Build/push | Handled by CI/CD (`amplifier-online cicd create` → `git push` → ghcr → provisioner imports into ACR); never a manual `docker push` |
 | Health endpoints | Container must expose `/health` -> 200 OK |
 
 ### `web-app-awa`
@@ -662,9 +668,7 @@ without needing to declare them in `services.<name>.env`.
 > Each `up` rewrites the container's **entire** environment list from `services.<name>.env` plus the
 > auto-injected variables below. Anything added out-of-band via `az containerapp update` (or the
 > portal) is **wiped on the next deploy** — so the only durable home for a custom variable is the
-> service's `env:` block. (A Container App *secret* set via `az` may appear to survive, because the
-> ACA provider never returns secret values and so can't reconcile it away — but the env var
-> *referencing* that secret is still wiped, so the container stops seeing it. Don't rely on this.)
+> service's `env:` block.
 > This is also why there is no `SPEECH_KEY`/API-key injection for `cognitive-services`: the platform
 > is keyless by design — authenticate with the injected `*_ENDPOINT`/`*_REGION` vars and
 > `DefaultAzureCredential`.
@@ -926,7 +930,7 @@ Before running `amplifier-online up`, verify:
 - [ ] Web/frontend services have `auth_exclude` configured if they proxy API calls (e.g., `["/api"]`)
 - [ ] API services do NOT have `protected` set (deprecated — APIs use JWT middleware, not EasyAuth)
 - [ ] Frontend `protected` is set to `login` (always enforced for browser-facing frontends)
-- [ ] For containerized deployments: images have been built and pushed to ACR
+- [ ] For containerized deployments: CI/CD is set up to deliver images (`amplifier-online cicd create`, then `git push`) — images are not pushed to ACR by hand
 - [ ] For containerized deployments: each container has `/health` endpoint
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`
 - [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)

@@ -25,7 +25,7 @@ push to main (path filter)          ┌─────────────�
 │  build + push  │  ghcr.io          │     repository_id == ao-deploy-repo-id     │
 │  ───────────▶  │                   │     ref/environment == ao-deploy-ref/-env  │
 │  deploy job    │  OIDC token +     │  3. Import ghcr.io image → ACR             │
-│  POST /deploy ─┼──────────────────▶│  4. stack.deploy_image (roll revision)     │
+│  POST /deploy ─┼──────────────────▶│  4. roll new revision                      │
 └───────────────┘  Bearer $OIDC      └──────────────────────────────────────────┘
 ```
 
@@ -124,8 +124,8 @@ deploy job  (needs: build, environment: production, permissions: id-token: write
        body: { image, service, ghcr_token, manifest }   # manifest = amplifier-online.yaml as JSON
 ```
 
-- The deploy is **stateless**: the workflow sends the checked-out `amplifier-online.yaml` (as JSON) in
-  the request body, so the provisioner needs no server-side copy of the manifest.
+- The deploy is **stateless**: the committed `amplifier-online.yaml` is what gets deployed — the
+  workflow sends it (as JSON) in the request body, so the provisioner needs no server-side copy.
 - `ghcr_token` (the run's `GITHUB_TOKEN`) lets the provisioner pull the image from ghcr.io to import
   it into ACR. The deployed image is the **SHA-tagged** one for determinism.
 - There is **no `az` CLI, no ACR login, and no `az containerapp/webapp` call** in these workflows.
