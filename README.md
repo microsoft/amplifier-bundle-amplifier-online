@@ -13,7 +13,7 @@ amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-amplifie
 ## Prerequisites
 
 - [Amplifier CLI](https://github.com/microsoft/amplifier) installed
-- [Amplifier Online CLI](https://github.com/microsoft-amplifier/amplifier-online) installed (`uv tool install git+https://github.com/microsoft-amplifier/amplifier-online@main`)
+- [Amplifier Online CLI](https://github.com/microsoft/amplifier-online) installed (`uv tool install git+https://github.com/microsoft/amplifier-online#subdirectory=cli`)
 - Azure credentials configured (interactive browser or `az login`)
 
 ## Usage
