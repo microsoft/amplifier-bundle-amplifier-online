@@ -271,12 +271,14 @@ resources:
 - **API backend** never gets EasyAuth — use JWT middleware (`jwt_middleware.py`) for token validation.
 - **SWA frontend** always gets authentication enforced via `staticwebapp.config.json` route rules (`protected: login`).
 - **Two Entra registrations:** `ao-{project}-client` (frontend login) and `ao-{project}-api` (backend audience, `access_as_user` + APIM). Frontend gets `AZURE_CLIENT_ID` (the `-client`) + `AZURE_API_CLIENT_ID` (the `-api`); backend gets `AZURE_CLIENT_ID` = the `-api`.
-- Volumes are supported on the API service. Add `volume` with `mount_path` and `size_gib`
-  under `services.api:`. The `mount_path` **must** start with `/mounts/` (e.g., `/mounts/data`)
-  — this is an Azure Web App platform requirement. The platform enforces single-instance
-  mode when a volume is configured. If using SQLite on a volume, see the
-  `services.<name>.volume` section in the manifest schema for VFS and journal mode
-  requirements — the same Azure Files (SMB) guidance applies to both stacks.
+- Volumes are supported on the API service. Add `volume` with `mount_path`, `size_gib`, and
+  optionally `tier` (`standard`/`premium`) under `services.api:`. The `mount_path` **must**
+  start with `/mounts/` (e.g., `/mounts/data`) — this is an Azure Web App platform requirement.
+  Use `tier: premium` (Premium_LRS SSD, min 100 GiB) for throughput-sensitive volumes that are
+  latency-bound on many small file ops. The platform enforces single-instance mode when a
+  volume is configured. If using SQLite on a volume, see the `services.<name>.volume` section
+  in the manifest schema for VFS and journal mode requirements — the same Azure Files (SMB)
+  guidance applies to both stacks.
 
 ### Frontend ↔ Backend Communication
 
