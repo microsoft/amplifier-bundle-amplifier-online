@@ -1069,3 +1069,40 @@ variables — Failure Mode 17.)
 
 ---
 
+## Failure Mode 38: Volume Throughput Bottleneck / Standing Write Backlog (Standard Azure Files)
+
+**Applies to:** any stack with a `services.<name>.volume` doing many small file ops (durable
+queues, event stores, write-heavy state).
+
+**Symptom:** Under real/concurrent load the service builds a standing write backlog and latency
+climbs (e.g. `/status` 4–5s) even though nothing is lost (durable queue, `dead_letter=0`). CPU
+and memory look nearly idle on both the app container and any backing VM.
+
+**Diagnostic:**
+```bash
+amplifier-online logs --container api        # queue depth / backlog climbing, not errors
+# App/VM CPU low (single-digit %), memory low — rules out compute.
+```
+
+**Root cause:** The volume defaults to **Standard Azure Files (SMB)**. A durable queue does many
+small file ops per batch, and Standard SMB's per-operation latency caps throughput **regardless
+of CPU** — raising the vCPU/memory profile does not help.
+
+**Fix:** Move the volume to a Premium SSD file share via the manifest:
+```yaml
+services:
+  api:
+    volume:
+      mount_path: /data
+      size_gib: 100        # Premium minimum is 100 GiB
+      tier: premium
+```
+Re-run `amplifier-online up`. `tier: premium` provisions a Premium_LRS FileStorage share.
+
+**Important — tier change provisions a *new*, empty share; the platform does not migrate data.**
+If the existing data must be preserved, copy it across during a brief write-quiesce window before
+cutover: scale the app to zero replicas (freeze the writer), `azcopy sync` the old share → the
+new Premium share, verify parity, then switch the volume over and scale back up.
+
+---
+

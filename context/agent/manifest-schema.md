@@ -40,6 +40,7 @@ services:
     volume:                   # Optional per-service persistent volume
       mount_path: <path>      # Mount path inside the container
       size_gib: <integer>     # Volume size in GiB
+      tier: <standard|premium> # Optional; standard (default) or premium SSD (min 100 GiB)
     deploy:                   # Optional per-service push-to-deploy override (see the `deploy` block below)
       repo: <owner/repo>
       ref: <git-ref>          # e.g. refs/heads/main
@@ -237,6 +238,11 @@ services:
 - **Optional.** Attaches a persistent volume to a service.
 - `mount_path` — path inside the container where the volume is mounted.
 - `size_gib` — size of the volume in GiB.
+- `tier` — `standard` (default) or `premium`. `premium` provisions a Premium_LRS SSD file
+  share (FileStorage account) for throughput-sensitive workloads that are latency-bound on
+  many small file ops — Standard SMB per-op latency caps throughput regardless of CPU (e.g. a
+  durable event queue). Premium is provisioned at a **minimum of 100 GiB** and billed on the
+  provisioned size, so `size_gib` must be `>= 100` when `tier: premium`.
 - Not under `resources` — defined on the service directly.
 - **Supported stacks:** `web-app-aca`, `internal-service-aca`, and `web-app-awa` (all under `services.<name>.volume`).
   Not supported on `static-web-app`.
