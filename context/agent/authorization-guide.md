@@ -221,5 +221,7 @@ groups, *or* scope/permission edits — not just group changes.
 
 - `msal-authentication-guide.md` — how SPAs authenticate and acquire Bearer tokens
 - `stacks-reference.md` — internal service-to-service auth (`azp` whitelist, MI tokens)
+- `user-resource-access-guide.md` — how a **backend/long-running service** acts on a user's M365
+  resources (why no server-side token broker; app identity / capability / forwarded token / HITL)
 - `troubleshooting-playbook.md` — diagnosing specific authorization failures (`AADSTS50105`,
   missing `roles`, group overage)

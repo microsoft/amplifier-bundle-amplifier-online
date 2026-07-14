@@ -76,6 +76,7 @@ context/
     cicd-guide.md
     msal-authentication-guide.md
     authorization-guide.md
+    user-resource-access-guide.md
 ```
 
 ## Supported Stacks

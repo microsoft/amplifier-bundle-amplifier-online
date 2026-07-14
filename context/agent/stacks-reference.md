@@ -462,6 +462,12 @@ tokens with MSAL.js:
   `https://login.microsoftonline.com` (MSAL token requests). A missing origin is silently blocked
   by the browser and surfaces only after deploy.
 
+> **This is the frontend/browser case.** A SPA acquires the *user's* delegated tokens on the
+> user's device. A **backend or long-running service cannot hold a user's delegated token** —
+> Conditional Access token protection (`AADSTS530084`) binds it to the device. A backend acts
+> under its own app identity, a user-minted capability, or a forwarded short-lived token. See
+> `user-resource-access-guide.md`.
+
 ### Optional Serverless API Functions
 
 You can add serverless functions alongside your static site:

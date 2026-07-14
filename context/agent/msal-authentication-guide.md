@@ -690,5 +690,6 @@ export default App;
 
 - [Stacks Reference](stacks-reference.md) - All stacks, selection criteria, and per-stack auth
 - [Authorization Guide](authorization-guide.md) - Roles vs groups, overage, identity binding
+- [User-Resource Access Guide](user-resource-access-guide.md) - This guide is the **frontend/browser** side (a user signs in, the SPA acquires delegated tokens). For a **backend/long-running service** acting on a user's M365 resources (OneDrive/SharePoint/Teams) — where token protection forbids holding the user's token — see that guide.
 - [Troubleshooting Playbook](troubleshooting-playbook.md) - Common deployment issues
 - [Manifest Schema](manifest-schema.md) - Project configuration reference
