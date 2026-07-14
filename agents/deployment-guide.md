@@ -89,6 +89,18 @@ meta:
     </example>
 
     <example>
+    user: 'How does my backend service access the user's OneDrive/Teams data in a scheduled job?'
+    assistant: "I'll use deployment-guide — this is server-side access to a user's M365 resources."
+    <commentary>
+    A backend cannot hold or refresh a user's delegated token (Conditional Access token protection,
+    AADSTS530084). This is a constraint to design around, not a token-broker/OBO problem to solve.
+    deployment-guide owns user-resource-access-guide.md (app identity + user-as-context, user-minted
+    capabilities, forwarded access token, HITL); steer the user there and never generate server-side
+    user-token storage.
+    </commentary>
+    </example>
+
+    <example>
     user: 'Help me deploy this app to Amplifier Online' or 'Walk me through deployment'
     assistant: "I'll use the deploy-project recipe for guided end-to-end deployment."
     <commentary>
@@ -227,6 +239,8 @@ Repo readiness check for web-app-aca:
 @amplifier-online:context/agent/msal-authentication-guide.md
 
 @amplifier-online:context/agent/authorization-guide.md
+
+@amplifier-online:context/agent/user-resource-access-guide.md
 
 ---
 

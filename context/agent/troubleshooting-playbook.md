@@ -1042,6 +1042,7 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `amplifier-online cicd create` | `cicd-guide.md` |
 | `AADSTS50105` | User not assigned to a role; or nested/mail-enabled group | Failure Mode 9, Failure Mode 30 |
 | `AADSTS53000` | Conditional Access — device not compliant/managed | Sign in from a compliant device |
+| `AADSTS530084` | Conditional Access **token protection** — a backend/native flow tried to obtain a user's delegated token; it is device-bound and cannot be held or refreshed server-side | `user-resource-access-guide.md` (do not build a server-side token broker) |
 
 ---
 
