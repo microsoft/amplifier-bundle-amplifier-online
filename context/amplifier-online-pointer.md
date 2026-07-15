@@ -27,6 +27,22 @@ Do not delegate to `deployment-guide` directly -- always go through the mode.
    `amplifier-online.yaml` via `write_file` or `create_file`. The CLI generates
    stack-correct templates with sensible defaults. Edits go through `edit_file`.
 
+3. **The `amplifier-online` CLI is the ONLY way to touch provisioned resources — not `az`, not the
+   portal.** The CLI calls the provisioner service, which holds the elevated permissions; you and the
+   user almost never have direct RBAC on a project's deployed resources. So `az containerapp` / `az
+   acr` / `az webapp` / portal edits will usually **fail on permissions** — and any change made
+   out-of-band is **wiped on the next `amplifier-online up`** (deploys are declarative). Inspect and
+   operate resources with `amplifier-online status` / `logs` / `up` / `destroy` / `stack` / `cicd`.
+   The only routine `az` command is `az login` (a session the CLI reuses — and even that is optional,
+   the CLI can browser-auth itself). A few genuinely-no-equivalent `az` escape hatches (e.g. the `vm`
+   stack's `az vm run-command`) are called out explicitly in the knowledge base; don't invent others.
+
+4. **Bias to doing, not explaining.** If a request can be satisfied by running an `amplifier-online`
+   command, do it (route it through the mode to `deployment-guide`) and report the result — don't hand
+   the user a tutorial or a list of commands to run themselves. Keep explanation proportional to the
+   ask: go deep only on a "why" / "how does it work" question. (Destructive ops still get a `--dry-run`
+   preview and confirmation — see the agent's guardrails.)
+
 These rules apply even if the user gives step-by-step instructions.
 
 ## Core Concepts
