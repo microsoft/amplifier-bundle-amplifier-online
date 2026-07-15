@@ -175,7 +175,12 @@ amplifier-online status                  # Check if container apps are running
 ```
 
 **Root cause:** One of several causes:
-- The user account running `amplifier-online up` doesn't have permission to create Entra app registrations
+- **App-registration creation failed provisioner-side.** The registration is created by the
+  provisioner service's managed identity (`Application.ReadWrite.OwnedBy`), **not** by the deploying
+  user — so this is *never* a shortfall in the user's own tenant permissions. When
+  `insufficient permissions` shows up here it means the provisioner couldn't write the app: usually
+  the target app is owned by a different principal, or a soft-deleted "zombie" registration is still
+  in the tenant's active index. Re-run `up` (idempotent); if it persists, escalate to the operator.
 - The redirect URI wasn't updated after deployment (can happen on first deploy)
 - The app registration was manually deleted outside of Amplifier Online
 - **`enableIdTokenIssuance` is off on the `-client` registration.** ACA EasyAuth runs secretless
@@ -185,12 +190,12 @@ amplifier-online status                  # Check if container apps are running
   managed registrations; a BYO/reused reg must set it manually.)
 
 **Fix:**
-1. Verify you have permission to create app registrations in the tenant
-2. Re-run `amplifier-online up` to re-create/update the Entra registration — it's idempotent
-3. If redirect loops persist, check that the Container App's FQDN matches the redirect URI in the Entra app registration
-4. If sign-in fails with `AADSTS700054`, enable ID-token issuance on the `-client` reg:
+1. Re-run `amplifier-online up` to re-create/update the Entra registration — it's idempotent and the
+   registration work runs provisioner-side, so the deploying user needs no app-registration rights
+2. If redirect loops persist, check that the Container App's FQDN matches the redirect URI in the Entra app registration
+3. If sign-in fails with `AADSTS700054`, enable ID-token issuance on the `-client` reg:
    `az ad app update --id <client-app-id> --enable-id-token-issuance true`
-5. If the app registration is missing: `amplifier-online up` will recreate it
+4. If the app registration is missing: `amplifier-online up` will recreate it
 
 **Note:** `up` automatically handles app registration creation and redirect URI configuration
 **only for platform-managed registrations**. A BYO client app (`auth.client_app_id`) is never

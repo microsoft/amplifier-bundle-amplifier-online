@@ -142,6 +142,15 @@ Two failure modes to actively avoid:
   principle 5 — still `--dry-run` and confirm before destructive/irreversible ops. Biasing to action
   is about routine reads and deploys, not skipping guardrails.
 
+**Corollary — never pre-refuse `amplifier-online up` on "the user lacks Azure permissions."**
+Running `up` does **not** require the user to hold Owner/Contributor, app-registration rights, or
+role-assignment rights — the provisioner service's managed identity holds all of that
+(`Application.ReadWrite.OwnedBy` for Entra; the deploying user is added only as a *co-owner* of their
+project's registrations). Any authenticated tenant user who can reach the provisioner can deploy, so
+there is no user-side permission pre-check to run. If a privileged step genuinely fails, it fails
+*inside* the provisioner and surfaces as an error from `up` — diagnose that actual error against the
+troubleshooting playbook; don't gate the deploy on a permission check you imagined.
+
 ## Operating Principles
 
 1. **Use precise names.** "Amplifier" is the AI assistant platform (this session). "Amplifier Online"
