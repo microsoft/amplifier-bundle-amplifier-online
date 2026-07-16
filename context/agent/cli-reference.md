@@ -43,29 +43,6 @@ az login
 amplifier-online stack list  # Will use existing az login session
 ```
 
-### Calling a deployed project's API from a script/CLI
-
-To call a deployed project's API (EasyAuth- or JWT-protected) from a script or the CLI, acquire
-a bearer token for the project's **`-api`** registration audience:
-
-```python
-from azure.identity import DefaultAzureCredential
-
-cred = DefaultAzureCredential()
-token = cred.get_token("api://<api-client-id>/access_as_user")
-# → send as: Authorization: Bearer <token.token>
-```
-
-- The Azure CLI app id `04b07795-8ddb-461a-bbee-02f9e1bf7b46` is pre-authorized on the project's
-  `-api` registration (and on the `web-app-aca` stack it is in the EasyAuth `allowedApplications`
-  list), so `az`/scripts can call the API without triggering an admin-consent prompt.
-- Request the **`api://<api-client-id>/access_as_user`** scope. Requesting the wrong scope (e.g.
-  `https://graph.microsoft.com/.default`, or a bare client id) yields a **401 audience mismatch** —
-  the token's `aud` won't match `api://<api-client-id>`.
-- Wrong-tenant login is a common cause of failures; fix it with `az login --tenant <tenantId>`.
-- If a token still reflects stale roles/groups after a change, clear the token cache — see the
-  cache-clear recipe in `authorization-guide.md`.
-
 ---
 
 ## `amplifier-online config`

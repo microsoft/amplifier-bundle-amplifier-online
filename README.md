@@ -48,9 +48,8 @@ For specific questions, the `deployment-guide` agent is available via the mode. 
 - CLI command reference
 - Stack comparison (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
 - Manifest schema and examples
-- Troubleshooting playbook (18 named failure modes)
+- Troubleshooting playbook of named failure modes
 - CI/CD setup with GitHub Actions
-- MSAL.js frontend authentication
 
 ## What's Included
 
@@ -74,9 +73,6 @@ context/
     project-analysis.md
     troubleshooting-playbook.md
     cicd-guide.md
-    msal-authentication-guide.md
-    authorization-guide.md
-    user-resource-access-guide.md
 ```
 
 ## Supported Stacks

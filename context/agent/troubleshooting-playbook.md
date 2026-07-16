@@ -183,18 +183,16 @@ amplifier-online status                  # Check if container apps are running
   in the tenant's active index. Re-run `up` (idempotent); if it persists, escalate to the operator.
 - The redirect URI wasn't updated after deployment (can happen on first deploy)
 - The app registration was manually deleted outside of Amplifier Online
-- **`enableIdTokenIssuance` is off on the `-client` registration.** ACA EasyAuth runs secretless
-  in this tenant, so it relies on the implicit `id_token` from `/authorize`; without it sign-in
-  fails with `AADSTS700054: response_type 'id_token' is not enabled for the application`. (Every
-  login client needs this — SWA/AWA hybrid OIDC and ACA EasyAuth alike. The platform sets it on
-  managed registrations; a BYO/reused reg must set it manually.)
+- **ID-token issuance is off on a BYO/reused `-client` registration**, so sign-in fails with
+  `AADSTS700054`. The platform enables this on the registrations it manages; a BYO or reused
+  registration must have 'ID tokens' (implicit grant) enabled on it — see the BYO note below.
 
 **Fix:**
 1. Re-run `amplifier-online up` to re-create/update the Entra registration — it's idempotent and the
    registration work runs provisioner-side, so the deploying user needs no app-registration rights
 2. If redirect loops persist, check that the Container App's FQDN matches the redirect URI in the Entra app registration
-3. If sign-in fails with `AADSTS700054`, enable ID-token issuance on the `-client` reg:
-   `az ad app update --id <client-app-id> --enable-id-token-issuance true`
+3. If sign-in fails with `AADSTS700054`, re-run `up` for a platform-managed registration; for a BYO
+   registration, enable 'ID tokens' (implicit grant) on it yourself (see the note below)
 4. If the app registration is missing: `amplifier-online up` will recreate it
 
 **Note:** `up` automatically handles app registration creation and redirect URI configuration
@@ -493,51 +491,6 @@ cat ~/.amplifier-online/config.yaml                                       # Show
 
 ---
 
-## Failure Mode 9: Nested Entra Group Membership
-
-**Symptom:** User can log in successfully but gets access denied (403) when trying to access the app:
-```
-HTTP 403 - Forbidden
-User is authenticated but not authorized
-```
-
-**Diagnostic:**
-```bash
-amplifier-online logs --container web    # Look for "user not in authorized group" errors on web frontend
-amplifier-online logs --container api    # Look for 403 errors in JWT middleware on API backend
-# Check if the user is in a nested group (group-within-a-group)
-```
-
-**Root cause:** Neither EasyAuth (on web frontends) nor Entra JWT tokens support **nested group
-membership**. If a user is in GroupB, and GroupB is a member of GroupA, and the app checks for
-GroupA membership, the user will NOT be recognized as authorized. Only direct membership works.
-
-This affects:
-- **Web frontends:** EasyAuth's group claim doesn't include nested groups.
-- **API backends:** The JWT `groups` claim doesn't include nested groups either.
-
-**Fix:**
-1. Verify group membership structure:
-   - Azure Portal → Entra ID → Groups → [your admin_group or user_group]
-   - Check "Members" tab
-   - If the user is not directly listed, they're in a nested group
-
-2. **Option A (Recommended):** Add the user directly to the authorized group
-   - Azure Portal → Entra ID → Groups → [group] → Add member
-
-3. **Option B:** Update the global config to use a different group that contains direct members
-   ```bash
-   amplifier-online config
-   # Update admin_group / user_group to a group with only direct members
-   ```
-
-4. Re-run `amplifier-online up` to update configuration
-
-**Note:** This is an Azure platform limitation, not an Amplifier Online bug. Nested groups do
-not work with EasyAuth, Static Web Apps authentication, or JWT group claims.
-
----
-
 ## Failure Mode 10: Custom Health Path Returns 401 (EasyAuth Blocks It on Web Services)
 
 **Applies to:** Web/frontend services only. API/backend services do not have EasyAuth.
@@ -618,8 +571,7 @@ A warning (non-blocking) is emitted if `requestedAccessTokenVersion` is not `2`.
 registrations on `amplifier-online destroy`. For a BYO **client** app, two things must be set by
 hand and are **not** auto-configured (both are printed post-deployment): the
 `…/.auth/login/aad/callback` redirect URI **and** 'ID tokens' / implicit-grant issuance (required
-for the Static Web App / EasyAuth login flow — its hybrid OIDC flow needs an `id_token` from
-`/authorize`). Note that **reusing an app registration from a prior deploy makes it a BYO
+for the login flow). Note that **reusing an app registration from a prior deploy makes it a BYO
 registration** on this read-only path. Symptom of a missing one: SWA login works once or 401s
 after a fresh deploy.
 
@@ -642,14 +594,12 @@ client ID baked in that no longer exists in Entra ID.
 ```bash
 # Check what GitHub repo variables the CI/CD workflow is using
 gh variable list --repo <owner>/<repo>
-
-# Compare with the actual login client registration
-az ad app list --display-name ao-<project>-client --query "[].appId" -o tsv
 ```
 
-If the frontend's `AZURE_CLIENT_ID` GitHub variable (the login `-client` appId) doesn't match
-the registration's `appId`, the variables are stale. (This is the project's MSAL.js login client,
-not the CI/CD deploy identity's `AZURE_CLIENT_ID` GitHub-OIDC app.)
+If the frontend's `AZURE_CLIENT_ID` GitHub variable is stale (points at an app registration a later
+`up` replaced), the deployed bundle carries a dead client id. (This is the project's login `-client`,
+not the CI/CD deploy identity's `AZURE_CLIENT_ID` GitHub-OIDC app.) `amplifier-online cicd update-vars`
+re-resolves it from the live registration — see the fix below.
 
 **Root cause:** `amplifier-online up` creates/updates Entra app registrations and sets SWA/Container
 App settings correctly, but it does **not** update GitHub repository variables. The CI/CD workflow
@@ -686,22 +636,18 @@ sign in when only organizational accounts should be permitted.
 
 **Diagnostic:**
 ```bash
-# Check if staticwebapp.config.json exists and has an auth section
+# Check that staticwebapp.config.json exists and has an auth section
 cat staticwebapp.config.json | grep -A 10 '"auth"'
-# Check SWA app settings for required env vars
-az staticwebapp appsettings list --name <swa-name>
 ```
 
-**Root cause:** Missing or incomplete `auth` section in `staticwebapp.config.json`, or missing
-`AZURE_TENANT_ID` in SWA app settings. Without the AAD identity provider configured with
-`openIdIssuer` pinned to the tenant, SWA falls back to allowing all Microsoft accounts
-(including personal MSA accounts) or no authentication at all.
+**Root cause:** Missing or incomplete `auth` section in `staticwebapp.config.json`, or the SWA is
+missing its injected `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` settings, so login isn't enforced. (If the
+config looks correct but has no effect at all, confirm the SWA is on the Standard plan — see Failure
+Mode 31.)
 
 **Fix:**
-1. Verify `staticwebapp.config.json` has the AAD identity provider with `openIdIssuer`
-   pinned to the tenant (e.g., `https://login.microsoftonline.com/<tenant-id>/v2.0`)
-2. Verify SWA app settings include both `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
-3. Re-run `amplifier-online up` to regenerate the configuration if needed
+1. Ensure `staticwebapp.config.json` defines the AAD identity provider and the protected routes
+2. Re-run `amplifier-online up` to regenerate the platform-managed auth configuration and settings
 
 ---
 
@@ -754,10 +700,9 @@ identity from it breaks.
 
 **Fix:** Don't read identity from `/.auth/me` — it's a token-store feature the platform runs without
 (tenant policy disables the storage the token store needs). EasyAuth still injects the
-`X-MS-CLIENT-PRINCIPAL*` headers on the web service, and APIs read identity from the validated JWT
-(see `authorization-guide.md`). (If you instead hit `AuthConfigInvalidRequest` while deploying a
-*customized* stack, remove the `tokenStore` block from the `authConfigs` resource — the platform
-already omits it.)
+`X-MS-CLIENT-PRINCIPAL*` headers on the web service, and APIs read identity from the validated JWT.
+(If you instead hit `AuthConfigInvalidRequest` while deploying a *customized* stack, remove the
+`tokenStore` block from the `authConfigs` resource — the platform already omits it.)
 
 ---
 
@@ -773,75 +718,8 @@ service-principal replication lag to ARM, or the provisioner restarting mid-stre
 already polls/retries for these internally.
 
 **Fix:** **Retry the command** — `up` is idempotent, so a re-run resumes safely. If `ObjectConflict`
-persists, a soft-deleted registration may be lingering (Entra keeps tombstones 30 days) — find it,
-then restore or permanently delete it and retry:
-```bash
-az rest --method GET --uri "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.application?\$filter=displayName eq 'ao-<project>-api'"
-```
-
----
-
-## Failure Mode 25: `TokenIssuedBeforeRevocationTimestamp` (CAE Revocation)
-
-**Symptom:** API calls fail with `TokenIssuedBeforeRevocationTimestamp` after a permission or
-group/role change.
-
-**Root cause:** Azure Continuous Access Evaluation (CAE) revoked the in-flight token after the
-directory change; the cached token predates the revocation timestamp.
-
-**Fix:** Re-acquire a fresh token (clear the cache — see the token-cache guidance in
-`authorization-guide.md`). For CLI scripts, validate freshness early so the failure surfaces up
-front:
-```bash
-az account get-access-token --resource "api://<client-id>"
-```
-
----
-
-## Failure Mode 26: Unexpected Consent Prompt on First Login
-
-**Symptom:** New users hit a "Permissions requested" consent dialog on first login (the developer's
-own account doesn't, because it consented earlier).
-
-**Root cause:** The app registration doesn't declare `User.Read` in `requiredResourceAccess`, so
-Entra prompts each new user for consent on the default scopes.
-
-**Fix:** Add `User.Read` (Microsoft Graph, delegated) to the registration's `requiredResourceAccess`
-so it's pre-declared. **Note:** in the corp tenant you are not a tenant admin and cannot grant admin
-consent — for anything beyond `User.Read`, use the established Graph-permission request process.
-
----
-
-## Failure Mode 27: Personal (MSA) Accounts Can Sign In to a Corp-Only App
-
-**Symptom:** Personal Microsoft accounts authenticate to an app that should be corp-tenant only.
-
-**Root cause:** The tenant ID is empty/missing, so the MSAL or EasyAuth authority falls back to
-`https://login.microsoftonline.com/common` (the multi-tenant + MSA endpoint).
-
-**Fix — pin the tenant per stack:**
-- **SPA / MSAL.js:** ensure `VITE_MSAL_TENANT_ID` is set **at build time** (it's baked into the
-  bundle — see the build-time diagnostic below).
-- **SWA:** pin `openIdIssuer` to `https://login.microsoftonline.com/<tenant-id>/v2.0` in
-  `staticwebapp.config.json` (not "common").
-- **ACA:** verify `AZURE_TENANT_ID` is injected (automatic via Bicep).
-
----
-
-## Failure Mode 28: CLI/Script Gets 403 After a Role or Group Change (Stale CLI Token Cache)
-
-**Symptom:** A user's `az`/script call to a deployed API returns 403 (or shows old roles/groups)
-right after their role or group membership changed.
-
-**Root cause:** Claims are evaluated at token issuance; the Azure CLI caches tokens, so the cached
-token carries stale claims until it expires.
-
-**Fix:** Clear the CLI token cache and re-authenticate:
-```bash
-az account clear && az login
-rm ~/.azure/msal_token_cache.*
-```
-(The full cross-surface cache guidance — browser/MSAL too — lives in `authorization-guide.md`.)
+persists, a soft-deleted registration may be lingering (Entra keeps tombstones 30 days); retry, and
+if it still fails, escalate to the platform operator to clear the tombstone.
 
 ---
 
@@ -850,34 +728,13 @@ rm ~/.azure/msal_token_cache.*
 **Symptom:** Login fails with `redirect_uri_mismatch` or `AADSTS50011: The redirect URI ... does
 not match the redirect URIs configured for the application`.
 
-**Root cause:** A project that signs users in needs **two different** redirect URI types on the
-`-client` registration, and they live under different platform sections:
-- **Web** (EasyAuth callback): `https://{fqdn}/.auth/login/aad/callback`
-- **SPA** (MSAL.js): `https://{fqdn}/` — must be registered under the **SPA** platform (not Web),
-  and in **both** the trailing-slash (`/`) and bare-origin forms.
-
-A SPA redirect URI registered under the **Web** platform instead of **SPA** produces
-`AADSTS9002326` ("cross-origin token redemption is permitted only for the 'Single-Page
-Application' client-type").
+**Root cause:** The `-client` registration's redirect URIs don't match the deployed app's URLs —
+usually because the app was reached at a different FQDN than the one registered, or a BYO
+registration was never configured.
 
 **Fix:** Re-run `amplifier-online up` to reconfigure redirect URIs for platform-managed
-registrations. For a BYO `-client`, add both URI types yourself (the deploy prints them); see
-Failure Mode 5. See also the AADSTS quick table below.
-
----
-
-## Failure Mode 30: Authorization Silently Fails (Mail-Enabled Group / 200-Group Overage)
-
-**Symptom:** A user is assigned to a role (or in the right group) per the Azure Portal, but the
-app treats them as unauthorized — no `roles` claim, or a missing `groups` claim.
-
-**Root cause (brief):** Two silent traps — assigning a **mail-enabled** group to an app role
-(Entra returns 201 and shows it in the portal but never emits the claim), or a user in **200+
-security groups** (the `groups` claim is replaced by `_claim_names`/`_claim_sources`).
-
-**Fix:** Prefer app **roles** over group claims (roles are never subject to overage), and use only
-**pure security groups** (`mailEnabled=false`). **`authorization-guide.md` owns the full
-explanation, detection commands, and the roles-vs-groups model — go there.**
+registrations. For a BYO `-client`, add the redirect URIs yourself (the deploy prints them); see
+Failure Mode 5.
 
 ---
 
@@ -1045,9 +902,6 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS900144` | Empty/missing `client_id` — a build-time var was not baked into the bundle | Build-Time Config Inlining (below) |
 | `AADSTS700016` | Application not found for the client id — stale/wrong client id in config or GitHub vars | Failure Mode 17 |
 | `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `amplifier-online cicd create` | `cicd-guide.md` |
-| `AADSTS50105` | User not assigned to a role; or nested/mail-enabled group | Failure Mode 9, Failure Mode 30 |
-| `AADSTS53000` | Conditional Access — device not compliant/managed | Sign in from a compliant device |
-| `AADSTS530084` | Conditional Access **token protection** — a backend/native flow tried to obtain a user's delegated token; it is device-bound and cannot be held or refreshed server-side | `user-resource-access-guide.md` (do not build a server-side token broker) |
 
 ---
 

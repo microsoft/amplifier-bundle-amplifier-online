@@ -375,16 +375,6 @@ fetch is needed for SWA-hosted SPAs.
 `VITE_MSAL_CLIENT_ID`) will result in empty strings at runtime because the platform only injects
 the `VITE_AZURE_*` variants.
 
-```typescript
-// Correct: reads platform-injected values
-const msalConfig = {
-  auth: {
-    clientId: import.meta.env.VITE_AZURE_CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_AZURE_TENANT_ID}`,
-  },
-};
-```
-
 > **Migrating from custom env var names?** If your app currently reads `VITE_MSAL_CLIENT_ID` or
 > similar, update your config module to read `VITE_AZURE_CLIENT_ID` and `VITE_AZURE_TENANT_ID`
 > instead. No changes to `amplifier-online.yaml` are needed — the platform handles injection.
@@ -420,17 +410,12 @@ platform expects. **Always audit** the existing file against this checklist:
 ```
 
 The `clientIdSettingName` tells SWA to read the app setting named `AZURE_CLIENT_ID` (injected by
-the Bicep template) and use it as the OAuth client ID for the built-in AAD login flow. The
-`openIdIssuer` pins login to a specific tenant — without it, any Microsoft account can log in.
+the Bicep template) and use it as the OAuth client ID for the built-in AAD login flow.
 
 **App registration requirements (separate from `staticwebapp.config.json`):** SWA's login flow
-also needs the project's Entra **client** app registration to have two things, or login fails at
-runtime even when `staticwebapp.config.json` is correct:
-- **'ID tokens' enabled** (Authentication > Implicit grant and hybrid flows) — SWA's built-in AAD
-  provider uses a hybrid OIDC flow that requires an `id_token` from `/authorize`. This is **not
-  SWA-specific**: every login client needs it — AWA's frontend is also a Static Web App, and ACA
-  EasyAuth (secretless in this tenant) likewise falls back to the implicit `id_token`. A missing
-  flag fails sign-in with `AADSTS700054` on any of these stacks.
+also needs the project's Entra **client** app registration to have two things set, or login fails
+at runtime even when `staticwebapp.config.json` is correct:
+- **'ID tokens' enabled** (Authentication > Implicit grant and hybrid flows).
 - the **`https://{swa-hostname}/.auth/login/aad/callback`** redirect URI (Web).
 
 For **platform-managed** registrations the provisioner sets both automatically. For a **BYO**
@@ -443,30 +428,6 @@ one of these two.
 > `staticwebapp.config.json` with no security headers, generic exclude patterns, and no
 > `post_login_redirect_uri`. When a user has invested in their config (custom CSP, refined routes,
 > build-tool-specific excludes), preserve their customizations and only merge in the `auth` section.
-
-### Calling Microsoft Graph or other external APIs
-
-The `static-web-app` stack has a login client (`ao-{project}-client`) but no first-party `-api`.
-A SWA SPA reaches external APIs (Microsoft Graph, SharePoint) by acquiring **its own** delegated
-tokens with MSAL.js:
-
-- **One token per resource.** Graph and SharePoint are distinct resources with distinct tokens —
-  acquire Graph scopes (`https://graph.microsoft.com/<scope>`) and SharePoint REST
-  (`https://<tenant>.sharepoint.com/.default`) separately. Request only the scopes each call needs.
-- **Delegated permissions need admin consent.** Graph scopes like `Files.Read.All`,
-  `Sites.Read.All`, or `Chat.Read` require tenant-admin consent on the `-client` registration.
-  Without it, the first call that needs them fails with a consent error — a human approval step,
-  not something `amplifier-online up` can grant.
-- **CSP must allow the call.** If the SPA sets a Content-Security-Policy, `connect-src` must list
-  every external origin it calls — `https://graph.microsoft.com`, `https://*.sharepoint.com`, and
-  `https://login.microsoftonline.com` (MSAL token requests). A missing origin is silently blocked
-  by the browser and surfaces only after deploy.
-
-> **This is the frontend/browser case.** A SPA acquires the *user's* delegated tokens on the
-> user's device. A **backend or long-running service cannot hold a user's delegated token** —
-> Conditional Access token protection (`AADSTS530084`) binds it to the device. A backend acts
-> under its own app identity, a user-minted capability, or a forwarded short-lived token. See
-> `user-resource-access-guide.md`.
 
 ### Optional Serverless API Functions
 
@@ -598,66 +559,12 @@ resources:
 
 ### Service-to-service authentication
 
-The internal `-api` registration is an audience only — there is no EasyAuth and no login client.
-Callers authenticate with a **managed-identity token**, and the service validates it in app
-middleware. Two layers of defense:
-
-1. **Network isolation** — `external: false` keeps the container off the public internet. This is
-   **not sufficient alone**: every app in the same Container Apps Environment can reach every other
-   internal app over the CAE network. Isolation stops outsiders, not neighbors.
-2. **Identity verification** — the JWT `azp` (authorized-party) check is the required second gate.
-   Even a neighbor that can reach the internal FQDN needs a token from an allowed caller.
-
-**Caller side** — the calling app's managed identity gets a token from the Instance Metadata
-Service (no secrets, automatic inside a Container App):
-
-```python
-from azure.identity import ManagedIdentityCredential
-
-credential = ManagedIdentityCredential()
-token = credential.get_token("api://<callee-app-id>/.default")
-headers = {"Authorization": f"Bearer {token.token}"}
-```
-
-**Callee side** — validate signature (JWKS), issuer, and audience (`api://<callee-app-id>`), then
-check `azp` against a whitelist of allowed caller client IDs. A managed-identity
-(client-credentials) token has a distinct shape — use it to tell a service caller from a user:
-
-| Claim | Service (MI) token | User token |
-|-------|--------------------|------------|
-| `azp` | caller's MI client ID | the SPA/CLI client ID |
-| `scp` | **absent** | `access_as_user` |
-| `name` / `preferred_username` | **absent** | present |
-| `roles` | absent unless assigned | app-role assignments |
-
-Debugging a 401/403 between services? Confirm the audience is `api://<callee-app-id>` and the
-caller's `azp` is whitelisted; a missing `scp` confirms it is an MI (not user) token.
-
-**Authorizing callers — two options:**
-
-- **Option A — `appRoleAssignmentRequired: false` (default) + `azp` whitelist.** Entra issues a
-  token to any authenticated MI; your code accepts only whitelisted callers. Add a caller by
-  putting its client ID in config and redeploying. Simplest starting point.
-- **Option B — `appRoleAssignmentRequired: true` + app-role assignments.** Entra refuses to issue
-  a token unless the calling MI has an explicit assignment on your service principal —
-  unauthorized callers are blocked before your code runs. Stronger, but you manage assignments.
-
-Granting app-role assignments on your **own** app registration does **not** require Privileged Role
-Admin (that constraint applies only to Microsoft first-party apps you don't own), so Option B is
-fully self-serviceable.
-
-**Why no `access_as_user` / APIM:** the tenant's APIM compliance requirement triggers specifically
-on `oauth2PermissionScopes` being defined — not on `identifierUris`. An audience-only registration
-avoids it. (Corollary: a *user-facing* API can also skip APIM by authorizing with app **roles**
-instead of an `access_as_user` scope.)
-
-**Going public later** is additive: add `oauth2PermissionScopes` → deploy Consumption-tier APIM →
-pre-authorize Azure CLI / your SPA → optionally set `appRoleAssignmentRequired: true` → set
-`external: true`. Your middleware then needs a second code path for user tokens (detected by the
-presence of `scp`) alongside the existing MI path.
-
-For the roles-vs-groups authorization model and the 200-group overage caveat, see
-`authorization-guide.md`.
+Callers authenticate with their **managed identity**; the platform injects the caller and callee
+identities so no secrets are involved. The internal `ao-{project}-api` registration exposes no
+OAuth scopes (audience only). The service validates the incoming JWT in app middleware against an
+`azp` (authorized-party) allow-list of permitted caller client IDs. `external: false` keeps the
+container off the public internet, but every app in the same CAE can reach it, so the `azp` check is
+the required second gate — add a caller by putting its client ID in the allow-list and redeploying.
 
 ---
 
