@@ -47,6 +47,7 @@ amplifier-online init            # Scaffold amplifier-online.yaml from a stack t
 amplifier-online up              # Deploy (add --dry-run to preview)
 amplifier-online status          # Show deployed container apps and resources
 amplifier-online logs            # Tail container logs (--since, --container)
+amplifier-online secret set      # Store a Key Vault-backed secret value (also: secret list, secret delete)
 amplifier-online destroy         # Tear down project resources (add --dry-run to preview)
 amplifier-online cicd create     # Generate GitHub Actions workflows
 ```

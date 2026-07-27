@@ -457,6 +457,13 @@ stages:
           Selected stack (from the stack-selection stage):
           {{stack_selection}}
 
+          PRE-FLIGHT — external secrets:
+            If the manifest has a top-level `secrets:` block, each referenced value must already be in
+            Key Vault or `amplifier-online up` fails up front with `MISSING_SECRET`. List what's stored
+            (`amplifier-online secret list`) and set any missing ones BEFORE the dry-run:
+            `amplifier-online secret set <keyVaultSecret>` (the logical name, not the env-var name).
+            (No action if the manifest declares no `secrets:`; `static-web-app` does not support them.)
+
           STEP 1: Dry-run preview
             Run: amplifier-online up --dry-run
 

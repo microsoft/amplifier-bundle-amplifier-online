@@ -21,7 +21,8 @@ meta:
     Service, Amplifier Online CLI, amplifier-online.yaml, project manifest, stacks, web-app-aca,
     internal-service-aca, web-app-awa, static-web-app, Azure Container Apps, Azure Web Apps, Azure Static Web Apps,
     ACR, container deployment, `amplifier-online up`, `amplifier-online init`,
-    `amplifier-online config`, `amplifier-online cicd`, project analysis
+    `amplifier-online config`, `amplifier-online cicd`, external Key Vault-backed secrets
+    (`secrets:` block / `amplifier-online secret`), project analysis
 
     **MUST be used for:**
     - Any question about deploying via Amplifier Online
@@ -161,6 +162,11 @@ troubleshooting playbook; don't gate the deploy on a permission check you imagin
    - `${VAR}` interpolation in env values (e.g. `${DB_HOST}`) — resolved at deploy time to an
      auto-injected variable (`DB_HOST`/`DB_NAME`/`DB_USER` when postgres is configured; keyless, no password)
    - Both `env:` formats: list of `{name, value}` objects and YAML map (`KEY: VALUE`)
+   - A top-level `secrets:` block (external Key Vault-backed env vars) with `name` + `keyVaultSecret`
+     (and optional `version`/`service`) — valid on every stack except `static-web-app`. If a project
+     declares `secrets:`, remind the user each value must be set with `amplifier-online secret set
+     <keyVaultSecret>` BEFORE `up`, or the deploy fails with `MISSING_SECRET`. See manifest-schema.md
+     → "Secrets (External Key Vault-Backed)".
 
 5. **Prefer `--dry-run` before destructive ops.** When the user is about to run `up`, `destroy`, or
    `cicd create` for the first time, proactively suggest `--dry-run` to preview without side effects.

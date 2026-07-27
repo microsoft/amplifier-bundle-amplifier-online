@@ -31,9 +31,10 @@ Match your application's architecture to a stack using these criteria:
 | JWT middleware (API token validation) | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Service-to-service auth (managed identity) | ✅ | ✅ | ❌ | ❌ | ✅ |
 
-> ⚠️ **`vm` managed databases:** keyless Cosmos, Redis, Storage, and Cognitive Services (endpoints
-> written to `/etc/amplifier-online/resources.env` on the VM) — **Postgres not yet supported**
-> (deferred). `vm` is the escape hatch for software that doesn't fit the managed-PaaS backing
+> ⚠️ **`vm` managed databases:** keyless Cosmos, Redis, Storage, Cognitive Services, **and Postgres**
+> (connection info written to `/etc/amplifier-online/resources.env` on the VM; Postgres is keyless via
+> the VM's Entra login — `DB_HOST`/`DB_NAME`/`DB_USER`, no password). `vm` is the escape hatch for
+> software that doesn't fit the managed-PaaS backing
 > services; it installs via cloud-init, not a container image, so most of the container/frontend
 > criteria above are ❌ by design.
 
@@ -582,8 +583,12 @@ managed-PaaS backing services (e.g. a graph database like Neo4j). Unlike every o
   Reachable over private IPs by resources in the VNet (notably ACA-deployed apps); it reaches
   platform backing services over their public endpoints.
 - **System-assigned managed identity** — can be granted the same keyless access to shared resources
-  (Cosmos, Redis, Storage, Cognitive Services) that ACA apps get. Their connection endpoints are
-  written to `/etc/amplifier-online/resources.env` on the VM (by a Run Command, refreshed on `up`).
+  (Cosmos, Redis, Storage, Cognitive Services, and Postgres) that ACA apps get. Postgres is keyless
+  here too: the platform creates a per-project database and registers the VM's managed identity as an
+  Entra login (no password — connect with an Entra token). Connection info is written to
+  `/etc/amplifier-online/resources.env` on the VM (by a Run Command, refreshed on `up`). External
+  secrets from the manifest `secrets:` block are delivered separately to
+  `/etc/amplifier-online/secrets.env` via a fetch-shim (see `manifest-schema.md` → "Secrets").
 - **Default-deny NSG** — only the inbound ports you list are allowed, and only from the source you
   specify.
 - **Optional persistent data disk** — survives VM config changes and re-runs of `up`.
@@ -603,8 +608,6 @@ managed-PaaS backing services (e.g. a graph database like Neo4j). Unlike every o
 - Public ingress — the VM has no public IP; no EasyAuth, no login client, no JWT middleware.
 - Container images / `deploy_image` — the `services:` map does not apply; software installs via
   cloud-init.
-- **PostgreSQL (not yet)** — deferred on the `vm` stack (Postgres carries a secret; delivery to the
-  VM is still TBD). Use Cosmos, or fetch a secret from Key Vault yourself.
 - Resolution of **internal** (`external: false`) ACA app names (v1) — external-ingress CAEs have no
   private DNS zone to link, so the VM can't resolve `*.internal.<domain>`. Reach internal apps by
   IP, or make them external.

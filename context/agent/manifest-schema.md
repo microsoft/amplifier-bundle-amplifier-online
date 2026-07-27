@@ -7,7 +7,7 @@ then edited by the developer.
 > **This is NOT a Kubernetes manifest.** Do not add `replicas`, `scale`, `liveness`,
 > `readiness`, `probes`, `volumes`, `containers`, or other Kubernetes fields -- they are
 > not valid and will cause errors. The only valid top-level keys are: `name`, `stack`,
-> `services`, `frontend`, `vm`, `auth`, `resources`, and `deploy`.
+> `services`, `frontend`, `vm`, `auth`, `resources`, `secrets`, and `deploy`.
 >
 > **This schema is reference documentation for understanding and editing manifests.**
 > To create a new manifest, always use `amplifier-online init --stack <stack>` -- never
@@ -82,6 +82,16 @@ vm:
     offer: <offer>
     sku: <sku>
     version: <version>
+
+# Optional: external secrets delivered from the platform Key Vault as env vars (project-level list)
+# The VALUE never lives in the manifest — only this reference does. Set the value out-of-band with
+# `amplifier-online secret set <keyVaultSecret>` BEFORE `up`. Not supported on static-web-app.
+# See the "Secrets (External Key Vault-Backed)" section below.
+secrets:
+  - name: <ENV_VAR_NAME>       # (required) env var the app reads (e.g. OPENAI_API_KEY); ^[A-Za-z_][A-Za-z0-9_]*$
+    keyVaultSecret: <logical>  # (required) KV secret name; stored as <project>-<logical>; ^[A-Za-z0-9-]+$
+    version: <kv-version>      # (optional) pin a KV version (freezes it); omit = latest (picked up on restart)
+    service: <service-name>    # (optional) scope to one service; omit = all services; invalid on vm
 
 # Optional: cross-project / bring-your-own auth registrations (all fields optional)
 auth:
@@ -657,7 +667,7 @@ resources:
 | SSH | Key auth only (`ssh_public_key`). No public SSH — manage via `az vm run-command` |
 | Networking | No public IP. Default-deny NSG; only listed `ports` allowed, from `source` (`cae-infra`/`vnet`/CIDR) |
 | Data disk | Optional `data_disk_gib` (0 = none); persists across `up` re-runs |
-| Resources | Supports: cosmos, redis, storage, cognitive-services (keyless MI RBAC; endpoints written to `/etc/amplifier-online/resources.env`, refreshed on `up`). **Postgres not yet supported (deferred).** |
+| Resources | Supports: cosmos, redis, storage, cognitive-services, **and postgres** — all keyless via the VM's managed identity; connection info written to `/etc/amplifier-online/resources.env`, refreshed on `up`. Postgres uses an Entra login (`DB_HOST`/`DB_NAME`/`DB_USER`; `DB_USER = <project>-vm`; no password). |
 | Auth | None — no EasyAuth, no login client, no JWT middleware, no App Insights |
 
 ---
@@ -680,11 +690,12 @@ without needing to declare them in `services.<name>.env`.
 > `DefaultAzureCredential`.
 
 > **The `vm` stack does not inject these as container env vars** — it has no containers. Instead, the
-> resource-connection variables (Cosmos/Redis/Storage/Cognitive Services, same names as below) are
-> written to **`/etc/amplifier-online/resources.env`** on the VM by a Run Command, refreshed on every
-> `up`; source that file at service start and authenticate via `DefaultAzureCredential`/IMDS. There
-> is **no App Insights and no auth injection** on `vm`, and **Postgres is not yet supported**
-> (deferred).
+> resource-connection variables (Cosmos/Redis/Storage/Cognitive Services **and Postgres**, same names
+> as below) are written to **`/etc/amplifier-online/resources.env`** on the VM by a Run Command,
+> refreshed on every `up`; source that file at service start and authenticate via
+> `DefaultAzureCredential`/IMDS. Postgres is keyless here too — the VM's Entra login provides
+> `DB_HOST`/`DB_NAME`/`DB_USER` (`DB_USER = <project>-vm`, no password). There is **no App Insights and
+> no auth injection** on `vm`.
 
 ### Injected When Auth Is Configured (any service or frontend has auth enabled)
 
@@ -875,12 +886,84 @@ Do NOT flag either format as an error during manifest review.
   explicit `enabled: true` — see resource defaults above), the platform auto-injects
   `DB_HOST`/`DB_NAME`/`DB_USER` (no `DB_PASSWORD` — keyless). Other auto-injected vars include
   `AZURE_CLIENT_ID`, the Cosmos/Redis/Storage/Cognitive-Services endpoints, etc.
-- **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a
-  secret in a plain `env:` value; rely on keyless managed-identity auth instead.
-- **All data resources are keyless — no secret is injected on any stack.** Postgres, Cosmos,
+- **Custom `env:` values are injected as plaintext app settings — not secrets.** Never put a real
+  secret in a plain `env:` value. For genuine external secrets (third-party API keys, tokens,
+  non-Entra passwords) declare a top-level **`secrets:`** entry instead — the platform delivers it
+  from its Key Vault as an env var without exposing the value. See the "Secrets (External Key
+  Vault-Backed)" section below.
+- **All platform data resources are keyless — no secret is injected for them.** Postgres, Cosmos,
   Redis, Storage, and Cognitive Services all authenticate with the workload's managed identity
-  (Postgres via an Entra token as the password; the others via RBAC / access-policy). Nothing
-  secret is stored as an app setting or `secretRef`.
+  (Postgres via an Entra token as the password; the others via RBAC / access-policy). Prefer this
+  keyless path wherever it exists; reach for `secrets:` only for credentials that have no keyless
+  alternative.
+
+---
+
+## Secrets (External Key Vault-Backed)
+
+For genuine external secrets — third-party API keys, tokens, non-Entra database passwords — that
+have **no keyless / managed-identity alternative**, declare them in the **top-level `secrets:`**
+block. The platform stores the value in its Key Vault (`ao-keyvault`) and delivers it to your app as
+an ordinary environment variable. **The value never appears in the manifest** (only the reference
+does), and **the app never calls Key Vault** — it just reads the env var.
+
+> Prefer keyless managed-identity auth wherever it exists: every platform data resource (Postgres,
+> Cosmos, Redis, Storage, Cognitive Services) is keyless and needs no secret. Use `secrets:` only for
+> credentials that genuinely have no keyless path.
+
+### Schema
+
+```yaml
+secrets:
+  - name: OPENAI_API_KEY        # (required) env var the app reads; ^[A-Za-z_][A-Za-z0-9_]*$
+    keyVaultSecret: openai-key  # (required) logical KV name; stored as <project>-openai-key; ^[A-Za-z0-9-]+$
+  - name: NEO4J_PASSWORD
+    keyVaultSecret: neo4j-password
+    version: 5f3c9a2b...        # (optional) pin a KV secret version; omit = latest
+    service: api                # (optional) scope to one service; omit = all services
+```
+
+- **`name`** (required) — the environment variable name your app reads.
+- **`keyVaultSecret`** (required) — the logical secret name. The platform prefixes it per project, so
+  the real Key Vault secret is `<project>-<keyVaultSecret>` (isolation is enforced by a per-secret
+  RBAC grant to the app's own managed identity). Note the YAML key is `keyVaultSecret` (camelCase).
+- **`version`** (optional) — pin a specific Key Vault version to freeze the value. Omit to track
+  **latest**; a rotated value is picked up on the app's next restart.
+- **`service`** (optional) — restrict the secret to one service by name. Omit to inject into every
+  service. **Not valid on the `vm` stack** (single workload — no named services).
+
+### Setting the value (out-of-band, before deploy)
+
+The value is set with the CLI, never in the manifest. Run from the project directory (the project
+name is read from the local `amplifier-online.yaml`):
+
+```
+amplifier-online secret set <keyVaultSecret> [--value <v>]   # omit --value for a hidden prompt
+amplifier-online secret list                                 # logical names only — values are never returned
+amplifier-online secret delete <keyVaultSecret>
+```
+
+`<keyVaultSecret>` is the **logical** name (the `keyVaultSecret:` value), **not** the env-var `name`.
+
+> **Set the value BEFORE `amplifier-online up`.** A real deploy that declares a secret whose value
+> isn't yet in Key Vault fails with `MISSING_SECRET` — the per-secret access grant can only be created
+> once the secret exists. Order: `secret set …` → `up`. (See the troubleshooting playbook.)
+
+### Per-stack support & delivery
+
+| Stack | `secrets:`? | How the value reaches the app |
+|-------|-------------|-------------------------------|
+| `web-app-aca` | ✅ | Container App Key Vault-backed secret + `secretRef` env, read by the app's own system-assigned managed identity |
+| `internal-service-aca` | ✅ | Same ACA `secretRef` / Key Vault mechanism |
+| `web-app-awa` | ✅ (backend Web App only) | App Service `@Microsoft.KeyVault(...)` app-setting reference |
+| `vm` | ✅ (no `service` scoping) | Fetch-shim writes `/etc/amplifier-online/secrets.env` (mode 0600), refreshed by a systemd timer |
+| `static-web-app` | ❌ **rejected** | A static frontend is client-side — anything it could read is public. Put secrets behind a backend service |
+
+### Rotation
+
+Delivery is **restart-to-pick-up**, not live-refresh. With `version` omitted (latest), rotating the
+value in Key Vault takes effect on the app's next restart; pin `version:` to freeze a value until you
+change the manifest and redeploy.
 
 ---
 
@@ -938,6 +1021,7 @@ Before running `amplifier-online up`, verify:
 - [ ] Frontend `protected` is set to `login` (always enforced for browser-facing frontends)
 - [ ] For containerized deployments: CI/CD is set up to deliver images (`amplifier-online cicd create`, then `git push`) — images are not pushed to ACR by hand
 - [ ] For containerized deployments: each container has `/health` endpoint
+- [ ] If `secrets:` are declared, each value is already set in Key Vault (`amplifier-online secret set <keyVaultSecret>`) BEFORE `up`, and `secrets:` is not used on `static-web-app`
 - [ ] `volume` config (if used) has both `mount_path` and `size_gib`
 - [ ] For `web-app-awa` volumes: `mount_path` starts with `/mounts/` (platform requirement)
 - [ ] Resource flags (`enabled: true/false`) are intentional
