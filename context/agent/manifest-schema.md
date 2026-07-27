@@ -898,8 +898,8 @@ when each variable becomes available prevents common configuration mistakes.
 | **Runtime** (container start) | Platform injects auth env vars — `AZURE_CLIENT_ID` (frontend login client) or `AZURE_API_CLIENT_ID` (backend JWT audience), plus `AZURE_TENANT_ID`. | backend: `os.environ["AZURE_API_CLIENT_ID"]`; frontend: `AZURE_CLIENT_ID` |
 
 **Key insight:** Container images must be environment-agnostic. Auth configuration is injected at
-runtime, which is why the MSAL guide prescribes the `/auth-config.json` pattern -- `entrypoint.sh`
-writes the runtime env vars to a JSON file that the SPA fetches at page load.
+runtime via the `/auth-config.json` pattern -- `entrypoint.sh` writes the runtime env vars to a
+JSON file that the SPA fetches at page load.
 
 ### Static Web App stacks (`static-web-app`, `web-app-awa` frontend)
 
