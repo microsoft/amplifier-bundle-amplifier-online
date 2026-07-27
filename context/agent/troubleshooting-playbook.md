@@ -966,3 +966,34 @@ new Premium share, verify parity, then switch the volume over and scale back up.
 
 ---
 
+## Failure Mode 39: Deploy Rejected — Declared Secret Not Set in Key Vault (`MISSING_SECRET`)
+
+**Applies to:** any stack that supports the `secrets:` block (all except `static-web-app`) when the
+manifest declares one or more `secrets:` entries.
+
+**Symptom:** A real (non-`--dry-run`) `amplifier-online up` fails **before provisioning** with:
+```
+MISSING_SECRET: secret '<project>-<keyVaultSecret>' not found in Key Vault.
+Run: amplifier-online secret set <keyVaultSecret>
+```
+
+**Root cause:** The manifest references a secret whose value was never stored in the platform Key
+Vault. The provisioner grants the app's managed identity read access to each secret **at deploy
+time**, which requires the secret to already exist — so a declared-but-unset secret is failed up
+front rather than deploying a broken app.
+
+**Fix:** Set each declared secret's value, then re-run the deploy. `<keyVaultSecret>` is the **logical**
+name (the `keyVaultSecret:` value in the manifest), not the env-var `name`:
+```bash
+amplifier-online secret set <keyVaultSecret>   # hidden prompt; or pass --value <v>
+amplifier-online secret list                   # confirm it's stored (names only, no values)
+amplifier-online up
+```
+The order is always **`secret set` → `up`**.
+
+**Related:** declaring `secrets:` on a `static-web-app` project fails validation (`INVALID_CONFIG`) —
+a static frontend is client-side, so anything it could read would be public. Move the secret behind a
+backend service (e.g. a `web-app-awa` backend or `internal-service-aca`).
+
+---
+

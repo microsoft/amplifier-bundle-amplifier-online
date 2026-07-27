@@ -213,6 +213,31 @@ amplifier-online logs --container api    # Only the api container
 
 ---
 
+## `amplifier-online secret`
+
+Manage a project's **external Key Vault-backed secrets** — the values referenced by the manifest's
+top-level `secrets:` block. The value is stored in the platform Key Vault and delivered to the app as
+an env var; it never appears in the manifest. Run from the project directory (the project name comes
+from the local `amplifier-online.yaml`).
+
+```bash
+amplifier-online secret set <keyVaultSecret> [--value <v>]   # store a value; omit --value for a hidden prompt
+amplifier-online secret list                                 # list logical secret names (values never returned)
+amplifier-online secret delete <keyVaultSecret>              # remove a secret from the vault
+```
+
+- `<keyVaultSecret>` is the **logical** name — the `keyVaultSecret:` value in the manifest, **not** the
+  env-var `name`. The platform stores it as `<project>-<keyVaultSecret>`.
+- **Set each declared secret's value BEFORE `amplifier-online up`.** A real deploy with a
+  declared-but-unset secret fails with `MISSING_SECRET` (the per-secret access grant can only be
+  created once the secret exists).
+- `secret list` returns names only; values are never returned by the API.
+
+See `manifest-schema.md` → "Secrets (External Key Vault-Backed)" for the `secrets:` block schema and
+per-stack support (`static-web-app` does not support secrets).
+
+---
+
 ## `amplifier-online destroy`
 
 Tear down all per-project resources: container apps, databases, storage, and the platform-created
