@@ -48,7 +48,7 @@ amplifier-online stack list  # Will use existing az login session
 ## `amplifier-online config`
 
 Create or update the global config file at `~/.amplifier-online/config.yaml`. Prompts for
-each field with current values as defaults — press Enter to keep or type a new value.
+`service_url` with the current value as the default — press Enter to keep or type a new value.
 
 ```bash
 amplifier-online config
@@ -56,22 +56,18 @@ amplifier-online config
 
 **Writes to:** `~/.amplifier-online/config.yaml`
 
-**Fields prompted:**
+**Config schema** (`~/.amplifier-online/config.yaml`):
 ```yaml
-subscription_id: <azure-subscription-id>
-location: westus2
-resource_group: amplifier-online-rg
-keyvault_name: amplifier-online-kv
-postgres_admin_login: aoadmin
-service_tree_id: <service-tree-id>
-admin_group: <entra-group-object-id>
-user_group: <entra-group-object-id>
-log_analytics_workspace_id: <workspace-id>
-acr_name: amplifieronlinecr
-service_url: https://<provisioner-fqdn>
+service_url: https://amplifier-online-apim.azure-api.net  # Provisioner endpoint (the only prompted field)
+provisioner_audience: ""  # Auto-discovered from the service's /metadata endpoint and cached
+tenant_id: ""             # Auto-discovered from the service's /metadata endpoint and cached
 ```
 
-**When to run:** One-time setup, or when platform config changes. Must exist before `init`.
+Only `service_url` is prompted. `provisioner_audience` and `tenant_id` are discovered
+automatically on first use and cached — you never type them. `service_url` defaults to
+`https://amplifier-online-apim.azure-api.net`.
+
+**When to run:** One-time setup, or when the provisioner URL changes. Must exist before `init`.
 
 ---
 
