@@ -128,6 +128,11 @@ deploy job  (needs: build, environment: production, permissions: id-token: write
   workflow sends it (as JSON) in the request body, so the provisioner needs no server-side copy.
 - `ghcr_token` (the run's `GITHUB_TOKEN`) lets the provisioner pull the image from ghcr.io to import
   it into ACR. The deployed image is the **SHA-tagged** one for determinism.
+- `service` must match the **service name in the manifest**, which is not always the workflow or
+  image name. On `web-app-awa` the workflow file is `backend-build-deploy.yaml` and the image is
+  `<repo>-backend`, but the service posted is **`api`** — that is the name the manifest uses and the
+  `{project}-api` Web App it targets. Sending `backend` there produces a deploy that appears to
+  succeed while updating nothing.
 - There is **no `az` CLI, no ACR login, and no `az containerapp/webapp` call** in these workflows.
 
 ## SWA Workflow Shape (`static-web-app`, `web-app-awa` frontend)

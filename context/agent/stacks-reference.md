@@ -154,6 +154,10 @@ resources:
     sku: Standard_LRS    # ← optional: Locally-redundant (default)
   cognitive-services:
     enabled: false       # ← shared multi-service Azure AI Services (keyless, managed identity)
+  kusto:
+    enabled: false       # ← per-project Azure Data Explorer database (keyless, Entra-only)
+  ai-foundry:
+    enabled: false       # ← keyless model inference on the shared AI Foundry account
 ```
 
 **Key concepts:**
@@ -259,6 +263,10 @@ resources:
     enabled: false
   cognitive-services:
     enabled: false       # shared multi-service Azure AI Services (keyless, managed identity)
+  kusto:
+    enabled: false       # per-project Azure Data Explorer database (keyless, Entra-only)
+  ai-foundry:
+    enabled: false       # keyless model inference on the shared AI Foundry account
 ```
 
 **Important:** `output_location` must match your actual build output:
@@ -547,6 +555,10 @@ resources:
     enabled: false
   cognitive-services:
     enabled: false       # shared multi-service Azure AI Services (keyless, managed identity)
+  kusto:
+    enabled: false       # per-project Azure Data Explorer database (keyless, Entra-only)
+  ai-foundry:
+    enabled: false       # keyless model inference on the shared AI Foundry account
 ```
 
 **Key concepts:**
@@ -556,7 +568,7 @@ resources:
 - **Internal DNS** -- the container is reachable at `<project>-api.internal.<env-default-domain>` from other containers in the same CAE
 - Volumes attach per-service (same as `web-app-aca`). When a volume is configured, the platform
   automatically enforces `maxReplicas=1` (single-instance mode).
-- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage, cognitive-services
+- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage, cognitive-services, kusto, ai-foundry
 
 ### Service-to-service authentication
 
@@ -673,6 +685,8 @@ resources:                     # optional keyless access, granted to the VM's ma
 | `redis` | Azure Managed Redis `default` access policy (keyless) |
 | `storage` | Storage Blob Data Contributor + a per-project container |
 | `cognitive-services` | Cognitive Services User on the shared keyless AI account |
+| `kusto` | Per-project Azure Data Explorer database; the identity gets the database `Admin` principal (keyless, Entra-only). Injects `KUSTO_CLUSTER_URI`, `KUSTO_DATABASE`, `KUSTO_INGEST_URI` |
+| `ai-foundry` | Cognitive Services OpenAI User on the shared AI Foundry account and its model deployment (keyless). Injects `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` |
 
 ### Operating the VM
 

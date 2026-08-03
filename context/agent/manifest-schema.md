@@ -131,6 +131,21 @@ resources:
                               # Shared multi-service Azure AI Services (Speech/Vision/Language/
                               # Document Intelligence/Translator/Content Safety); keyless (managed
                               # identity), no per-project sizing. Not available on static-web-app.
+
+  kusto:
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
+                              # Per-project database on the shared Azure Data Explorer cluster.
+                              # Keyless (Entra-only): the workload's managed identity is granted
+                              # the database `Admin` principal. Injects KUSTO_CLUSTER_URI,
+                              # KUSTO_DATABASE, KUSTO_INGEST_URI. Not available on static-web-app.
+
+  ai-foundry:
+    enabled: <bool>           # OPTIONAL (default: true when block exists)
+                              # Keyless model inference against the shared AI Foundry (AIServices)
+                              # account and its shared model deployment. Grants the workload's
+                              # managed identity Cognitive Services OpenAI User. Injects
+                              # AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT,
+                              # AZURE_OPENAI_API_VERSION. Not available on static-web-app.
 ```
 
 ---
@@ -324,7 +339,7 @@ appropriate because only one process ever writes.
   egress originates; `vnet` = the whole VNet) or a CIDR. There is **no public ingress** regardless.
 - `image` — optional OS image block (`publisher`/`offer`/`sku`/`version`); defaults to Ubuntu
   24.04 LTS.
-- **Resources.** The `vm` stack supports `cosmos`, `redis`, `storage`, `cognitive-services`, and
+- **Resources.** The `vm` stack supports `cosmos`, `redis`, `storage`, `cognitive-services`, `kusto`, `ai-foundry`, and
   `postgres` (see `resources` below). Enabling one grants the VM's managed identity keyless access **and** writes
   the same connection info the ACA stacks inject as env vars to **`/etc/amplifier-online/resources.env`**
   on the VM — written by a Run Command and **refreshed on every `up`** (so a resource added later
@@ -354,7 +369,7 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
 ### `resources`
 - **Optional** (all disabled by default).
 - **Not supported for:** `static-web-app` stack (supported by `web-app-aca`, `internal-service-aca`, `web-app-awa`, and `vm`)
-- **`vm` note:** supports `cosmos`, `redis`, `storage`, `cognitive-services`, and `postgres`. On `vm`,
+- **`vm` note:** supports `cosmos`, `redis`, `storage`, `cognitive-services`, `kusto`, `ai-foundry`, and `postgres` (no `volume`). On `vm`,
   the same connection variables below are written to `/etc/amplifier-online/resources.env` (via a Run
   Command, refreshed on `up`) rather than injected as container env vars; the VM authenticates via
   `DefaultAzureCredential`/IMDS.
@@ -380,6 +395,12 @@ BYO (per-role) registrations are validated read-only on `up`, never created, and
   (the Speech SDK wants it as `aad#{SPEECH_RESOURCE_ID}#{token}`). Because the endpoint is the
   **multi-service** host, raw Speech REST calls need a `/stt/` (recognition) or `/tts/` (synthesis)
   path prefix, or they 404 — the Speech SDK handles this
+- **kusto**: Creates a per-project database on the shared Azure Data Explorer cluster and grants the
+  workload's managed identity the database `Admin` principal; injected as `KUSTO_CLUSTER_URI`,
+  `KUSTO_DATABASE`, `KUSTO_INGEST_URI` — keyless, Entra-only, no connection string
+- **ai-foundry**: Grants keyless model inference against the shared AI Foundry (AIServices) account
+  and its shared model deployment (Cognitive Services OpenAI User); injected as
+  `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` — no API key
 
 ### `deploy` (push-to-deploy binding)
 - **Optional.** Consumed by `amplifier-online cicd create` to authorize which GitHub repo/ref/environment
@@ -615,7 +636,7 @@ resources:
 | API service auth | Never gets EasyAuth. Use JWT middleware (`jwt_middleware.py`) for token validation. |
 | Auth | Entra registration created when any service has auth enabled (default for web/api roles) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services, kusto, ai-foundry (plus per-service `volume`) |
 | Dockerfiles | Must exist for each service (not part of manifest, but prerequisite) |
 | Build/push | Handled by CI/CD (`amplifier-online cicd create` → `git push` → ghcr → provisioner imports into ACR); never a manual `docker push` |
 | Health endpoints | Each container must expose `/health` → 200 OK |
@@ -629,7 +650,7 @@ resources:
 | Ingress | Internal only (`external: false`). No public FQDN, no CORS. |
 | Internal DNS | `<project>-api.internal.<env-default-domain>` (reachable only within the CAE) |
 | Volume | Optional per-service: `mount_path`, `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services, kusto, ai-foundry (plus per-service `volume`) |
 | Dockerfiles | Must exist for the API service (not part of manifest, but prerequisite) |
 | Build/push | Handled by CI/CD (`amplifier-online cicd create` → `git push` → ghcr → provisioner imports into ACR); never a manual `docker push` |
 | Health endpoints | Container must expose `/health` -> 200 OK |
@@ -643,7 +664,7 @@ resources:
 | Frontend | Required: static-web-app config (`repo`, `branch`, `app_location`, `output_location`) |
 | Frontend auth | Always enforced: `protected: login` (sign-in required via `staticwebapp.config.json`) |
 | Volume | Optional per-service: `mount_path` (must start with `/mounts/`), `size_gib` |
-| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services |
+| Resources | Supports: postgres, cosmos, redis, storage, cognitive-services, kusto, ai-foundry (plus per-service `volume`) |
 | GitHub repo | Frontend code must be in GitHub |
 | CORS | API service must allow frontend origin |
 
@@ -667,7 +688,7 @@ resources:
 | SSH | Key auth only (`ssh_public_key`). No public SSH — manage via `az vm run-command` |
 | Networking | No public IP. Default-deny NSG; only listed `ports` allowed, from `source` (`cae-infra`/`vnet`/CIDR) |
 | Data disk | Optional `data_disk_gib` (0 = none); persists across `up` re-runs |
-| Resources | Supports: cosmos, redis, storage, cognitive-services, **and postgres** — all keyless via the VM's managed identity; connection info written to `/etc/amplifier-online/resources.env`, refreshed on `up`. Postgres uses an Entra login (`DB_HOST`/`DB_NAME`/`DB_USER`; `DB_USER = <project>-vm`; no password). |
+| Resources | Supports: cosmos, redis, storage, cognitive-services, kusto, ai-foundry, **and postgres** (no `volume`) — all keyless via the VM's managed identity; connection info written to `/etc/amplifier-online/resources.env`, refreshed on `up`. Postgres uses an Entra login (`DB_HOST`/`DB_NAME`/`DB_USER`; `DB_USER = <project>-vm`; no password). |
 | Auth | None — no EasyAuth, no login client, no JWT middleware, no App Insights |
 
 ---

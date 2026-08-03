@@ -234,6 +234,26 @@ per-stack support (`static-web-app` does not support secrets).
 
 ---
 
+## `amplifier-online app-regs`
+
+Show the project's Entra app registrations, read-only. Run from the project directory.
+
+```bash
+amplifier-online app-regs          # human-readable
+amplifier-online app-regs --json   # raw JSON, for scripts and the e2e harness
+```
+
+Reports `appId`, `signInAudience`, `identifierUris` and the `web` / `spa` redirect URIs for the
+project's `-api`, `-client` and base registrations. Returns an empty list when a project has no
+registrations; a Graph failure is a `502`, so a caller can tell "none registered" from "could not
+read".
+
+The **provisioner** performs the Graph read with its own identity, which is why this works from
+hosts where your own Graph token is refused — for example under a token-protection
+conditional-access policy, which is scoped to the Graph resource and leaves ARM calls unaffected.
+
+---
+
 ## `amplifier-online destroy`
 
 Tear down all per-project resources: container apps, databases, storage, and the platform-created

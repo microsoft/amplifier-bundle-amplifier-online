@@ -82,12 +82,20 @@ those requests.
 
 ## Failure Mode 3: ACR Image Doesn't Exist Yet (CI Hasn't Delivered It)
 
-**Symptom:** `amplifier-online up` fails with:
-```
-failed to pull image amplifieronlinecr.azurecr.io/my-project-api:latest
-The requested image's platform (linux/amd64) does not match
-manifest unknown: manifest tagged by "latest" is not found
-```
+**Symptom:** `amplifier-online up` **succeeds**, but the deployed site shows an Amplifier Online
+landing page instead of your application.
+
+This is expected on a first deploy. When a manifest references an ACR image whose tag is not in the
+registry yet, the provisioner substitutes a **landing placeholder** (`ao-landing`) rather than
+failing the deployment, and logs that it did so. Your first CI run replaces it.
+
+Substitution only happens when the tag is *definitively* absent (a 404 from the registry). A
+non-ACR image, an already-present tag, or a failed registry check all deploy the original image
+unchanged — so this can never clobber a working deployment, and re-running `up` after CI is
+idempotent.
+
+> An actual `manifest unknown: manifest tagged by "latest" is not found` pull error means something
+> else: the tag existed at deploy time but does not now, or the image is in a different registry.
 
 **Diagnostic:**
 ```bash
@@ -101,9 +109,9 @@ az acr repository show-tags --name amplifieronlinecr --repository my-project-api
 gh run list --workflow api-build-deploy.yaml
 ```
 
-**Root cause:** The manifest references an ACR image that doesn't exist yet because CI hasn't
-built and delivered it. Amplifier Online does not build images, and you do **not** push to the
-shared ACR by hand — no account has push access, so a manual `docker push` returns `UNAUTHORIZED`.
+**Root cause:** CI hasn't built and delivered the image yet. Amplifier Online does not build
+images, and you do **not** push to the shared ACR by hand — no account has push access, so a manual
+`docker push` returns `UNAUTHORIZED`.
 Images reach ACR only via **push-to-deploy**: your GitHub Actions workflow builds the image, pushes
 it to your own ghcr.io, and the provisioner imports it into ACR. On a first deploy this is expected
 until the first workflow run completes.
@@ -902,6 +910,10 @@ When the only signal is an `AADSTS` code in the browser console or CLI output:
 | `AADSTS900144` | Empty/missing `client_id` — a build-time var was not baked into the bundle | Build-Time Config Inlining (below) |
 | `AADSTS700016` | Application not found for the client id — stale/wrong client id in config or GitHub vars | Failure Mode 17 |
 | `AADSTS7002381` | Stale old-style workflow still does an Azure federated login — regenerate with `amplifier-online cicd create` | `cicd-guide.md` |
+| `AADSTS9002327` | A code/token issued to a **SPA** redirect is being redeemed outside a browser. Distinct from `9002326`: that one is a platform-type mistake, this one is the SPA bucket working as designed | Use a `publicClient` or `web` redirect for anything a backend redeems |
+| `AADSTS7000218` | Entra treats this client as **confidential** but no client authentication was presented | Present a client assertion (a federated identity credential supplies one with nothing stored) |
+| `AADSTS700025` | Entra treats this client as **public** but client authentication *was* presented | Drop the assertion. `7000218` and `700025` are mutually exclusive — they tell you which side of the line you are on |
+| `AADSTS530084` | Conditional Access **token protection** refused the sign-in. Scoped to the Graph resource and to particular client apps; device compliance is *not* the discriminator | Sign in through a broker (`az config set core.enable_broker_on_windows=true`, then `az login`). Expect a native dialog, not a browser tab |
 
 ---
 
