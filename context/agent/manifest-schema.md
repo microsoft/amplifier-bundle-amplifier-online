@@ -729,7 +729,7 @@ without needing to declare them in `services.<name>.env`.
 **Note:** These are injected for the services that need them. Web/frontend services get
 `AZURE_CLIENT_ID` (the login client) for EasyAuth/MSAL.js. API/backend services get
 `AZURE_API_CLIENT_ID` (the `-api` audience) for JWT middleware configuration (audience =
-`api://{AZURE_API_CLIENT_ID}`, JWKS endpoint = `https://login.microsoftonline.com/{AZURE_TENANT_ID}/...`).
+either the bare `AZURE_API_CLIENT_ID` GUID or `api://{AZURE_API_CLIENT_ID}` — v2 tokens carry the bare GUID as `aud`, so accept both; JWKS endpoint = `https://login.microsoftonline.com/{AZURE_TENANT_ID}/...`).
 The backend audience uses the non-reserved `AZURE_API_CLIENT_ID` name because azure-identity reads
 `AZURE_CLIENT_ID` as a user-assigned managed-identity client id, which would break keyless auth.
 

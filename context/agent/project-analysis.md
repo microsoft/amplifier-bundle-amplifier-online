@@ -253,7 +253,8 @@ Markers:
 If SQLite is detected and the application uses it for primary relational data (user records,
 orders, sessions), recommend evaluating `resources.postgres` instead. PostgreSQL eliminates
 SMB file-locking constraints on Azure Files volumes, survives container instance replacement,
-and credentials are injected automatically. SQLite-on-volume is appropriate only for
+and needs no credential at all — the workload authenticates with its own managed identity
+(`DB_HOST`/`DB_NAME`/`DB_USER` are injected; there is no password). SQLite-on-volume is appropriate only for
 file-adjacent data (FTS indexes, embedded caches, append-only logs).
 
 ---
@@ -338,7 +339,7 @@ file-adjacent data (FTS indexes, embedded caches, append-only logs).
 - Container Apps Environment provides internal DNS for service-to-service calls
 - No EasyAuth overhead; gets an `-api` registration only (no `-client`), and `access_as_user`/APIM are exposed only if user-facing (`auth.expose: true`)
 - Service-to-service auth via JWT middleware or managed identity tokens
-- Same optional resources (postgres, cosmos, redis, storage, cognitive-services) as `web-app-aca`
+- Same optional resources as `web-app-aca`: postgres, cosmos, redis, storage, cognitive-services, kusto, ai-foundry (plus a per-service `volume`)
 
 **Not suitable if:**
 - Service needs to be reachable from the public internet
