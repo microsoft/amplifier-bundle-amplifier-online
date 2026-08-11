@@ -476,7 +476,7 @@ Common causes:
 **Key insight:** EasyAuth is never deployed on API/backend services. Token validation is the
 API service's responsibility via JWT middleware. On the backend, `AZURE_API_CLIENT_ID` is the
 project's `-api` registration (`ao-{project}-api`). The middleware validates signatures against
-Entra's JWKS endpoint, checks audience (`api://{AZURE_API_CLIENT_ID}`), issuer, and expiry, and
+Entra's JWKS endpoint, checks audience — accepting **both** the bare `AZURE_API_CLIENT_ID` GUID and `api://{AZURE_API_CLIENT_ID}`, since a v2 token carries the bare GUID as `aud` — plus issuer and expiry, and
 extracts user identity from JWT claims.
 
 ---
