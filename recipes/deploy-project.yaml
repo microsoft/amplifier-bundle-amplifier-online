@@ -1,6 +1,57 @@
 # =============================================================================
+# DEPENDENCY MANIFEST (contract: recipe-dependency-manifest.v1)
+# =============================================================================
+# `schema_version: 2` makes this recipe PORTABLE. Every `agent:` reference
+# below resolves ONLY from the declared dependency closure here -- never from
+# the calling session's agent map (contract Core 3, closed-world resolution).
+# A caller bundle that does not carry `amplifier-online:deployment-guide` can
+# still run this recipe.
+#
+# The engine never infers a source from a namespace prefix (contract Core 11),
+# so this bundle's OWN agent must be declared self-referentially. The behavior
+# partial is declared rather than the whole root bundle deliberately: it is the
+# same install form the README documents, and it yields a closure of exactly
+# one dependency and exactly one agent instead of dragging in the entire
+# `amplifier-foundation@main` roster (~30 agents) that `bundle.md` includes.
+#
+# PIN NOTE -- why `@main` and not a commit SHA:
+#   Foundation fetches a ref with `git clone --depth 1 --branch <ref>`, which
+#   accepts a branch or a tag but NOT a commit SHA, and this repo publishes no
+#   tags. Pinning `@79088c0` (or the full sha) fails resolution outright:
+#     [DependencyResolutionError] ... Failed to clone ...@79088c0:
+#     fatal: Remote branch 79088c0 not found in upstream origin
+#   `@main` is therefore the most immutable ref a `source:` can express here.
+#   The exact revision is not lost: the runner records it per run (contract
+#   Core 7), and `recipe-runner plan` resolves this entry to
+#   79088c0bd8683364d4e8b3c4fe063b63128db85d -- the intended commit.
+# =============================================================================
+schema_version: 2
+
+dependencies:
+  - source: "git+https://github.com/microsoft/amplifier-bundle-amplifier-online@main#subdirectory=behaviors/amplifier-online.yaml"
+    kind: behavior
+    required_agents:
+      - "amplifier-online:deployment-guide"
+
+# =============================================================================
 # CHANGELOG
 # =============================================================================
+#
+# v1.1.0 (2026-09-04):
+#   - PORTABILITY: Declared `schema_version: 2` + a `dependencies` manifest so
+#     this recipe runs from ANY session bundle, not only from one that already
+#     carries `amplifier-online:deployment-guide`.
+#     * BEFORE: a legacy recipe. All 10 `agent:` references resolved from the
+#       CALLER session's agent map, so running it from any bundle without this
+#       one installed failed with "agent not found in configuration".
+#     * AFTER: closed-world resolution from the declared closure above. The
+#       single self-referential behavior-partial dependency supplies the one
+#       agent every step uses.
+#     * No step, prompt, stage, approval gate, or context variable changed.
+#       No unknown top-level keys and no step-level `agent_config` were present,
+#       so nothing had to be moved or commented out for v2's stricter parse.
+#     * VERSION FIELD CORRECTION: `version:` had drifted -- it still read
+#       "1.0.0" while this changelog had reached v1.0.2. 1.1.0 supersedes both.
 #
 # v1.0.2 (2026-07-06):
 #   - MODEL FIX: Reordered stages to match push-to-deploy. Images/SWA content
@@ -79,12 +130,14 @@ description: >
   recommends the right stack, verifies prerequisites, guides manifest creation, infrastructure
   provisioning, CI/CD-driven image delivery, and verification. Multi-stage with approval gates
   at critical decision points.
-version: "1.0.0"
+version: "1.1.0"
 author: "Amplifier Online"
 tags: ["amplifier-online", "deployment", "azure", "staged", "approval-gates"]
 
 # Requirements:
-#   - amplifier-online bundle (provides the deployment-guide agent)
+#   - None from the caller. The `dependencies` manifest above supplies
+#     `amplifier-online:deployment-guide`, so this recipe runs from any session
+#     bundle -- the amplifier-online bundle need not be installed in the caller.
 #
 # Usage:
 #   amplifier tool invoke recipes operation=execute \
