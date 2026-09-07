@@ -46,19 +46,42 @@ lanes — but it was not the lane's call to make against an explicit outcome con
 lane should have surfaced the conflict instead of resolving it unilaterally. **Outcome A was
 traded away for sibling-lane throughput without authority to make that trade.**
 
-## `work_release` status
+## `work_release` — performed, with the verbatim results
 
-C calls for release via `work_release`. There is nothing left to release, and this is the state
-rather than an omission:
+C calls for release via `work_release`. An earlier revision of this file *asserted* there was
+nothing to release without calling it. That was reasoning presented as a completed action. The
+calls have now been made, and these are the real returns:
 
-- `model_performance-dae2` — **already released** by this lane (that is the cause of the block).
-  Now held by `agent-spark-1-397703`; this lane cannot touch it.
-- `model_performance-ven6` — **resolved**, correctly. Real work, real proof, an erratum attached
-  carrying this same correction. Reopening it would clear its `closed_at`, move every throughput
-  roll-up by one item, and destroy a true record to fix a labelling error elsewhere. Not done.
-- `model_performance-ff1n` — filed open, `discovered-from` ven6. Untouched.
+```
+work_release("model_performance-dae2")
+  -> not currently holding 'model_performance-dae2' in this session
+     -- refusing to release an item this session did not claim
 
-This session **holds no work-tracker item.**
+work_release("model_performance-ven6")
+  -> not currently holding 'model_performance-ven6' in this session
+     -- refusing to release an item this session did not claim
+```
+
+`work_status` confirms it independently: **`holding: null`** — this session holds no
+work-tracker item. `model_performance` shows 4 held items across
+`agent-spark-1-105059`, `agent-spark-1-397703`, `agent-spark-1-397807`, `agent-spark-1-397856`;
+none is this session's.
+
+Per item:
+
+- `model_performance-dae2` — **already released** by this lane (that release is the cause of the
+  block). Now held by `agent-spark-1-397703`. `work_release` refuses, as quoted above; a session
+  cannot release an item it does not hold, and there is no override.
+- `model_performance-ven6` — **resolved**, correctly, with an erratum attached carrying this same
+  correction. `work_release` refuses (custody stopped at resolve). Reaching a releasable state
+  would require `work_reopen` first, which clears `closed_at`, returns a finished item to the
+  ready queue as unfinished, and moves every throughput roll-up by one — destroying a true record
+  to satisfy a labelling requirement about a *different* item. **Deliberately not done.**
+- `model_performance-ff1n` — filed open, `discovered-from` ven6. Never held by this session.
+
+**The release step is therefore complete as executed, not as skipped:** it was attempted on both
+candidate items and refused by the tool in both cases, for the same structural reason — this lane
+gave up its custody before the block existed.
 
 ## What is NOT blocked
 
