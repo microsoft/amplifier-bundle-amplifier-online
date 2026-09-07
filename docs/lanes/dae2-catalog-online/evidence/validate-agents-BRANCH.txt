@@ -1,0 +1,33 @@
+validate-agents v1.8.0  |  run-6d3687033c67  |  foundation @v2.1.2 (a27d5824517d078097b60d84779dd3eae80202cd)
+repo_path: <this worktree>  (branch lane/dae2-catalog-online @ 0911d6c)
+run date: 2026-09-07
+
+VERDICT: PASS WITH WARNINGS
+  agents discovered: 1 across 1 location  (candidates_scanned 1, non_agent_count 0)
+  quality: 0 good, 0 polish, 1 needs_work, 0 critical
+  structural summary: {"errors": 0, "passed": 1, "total": 1, "warnings": 1}
+
+  deployment-guide   desc 598 chars / 149 tok   example_count 0   commentary_count 0
+                     triggers ["DO NOT"]   model_role ["reasoning","general"]
+                     tools_source implicit
+
+  errors (0): none.
+
+  warnings (1):
+    NO_TOOLS_SECTION        "Agent has no explicit 'tools:' section - relying on inheritance"
+                            -- IDENTICAL TO STOCK. Accepted, not remediated (see DONE-NOTE.md).
+                            It is the sole driver of the needs_work classification; the report's
+                            own description-quality phase returned "Issues (description quality):
+                            None" and "No description change recommended."
+
+  suggestions (0): none.
+
+TRANSITION: FAIL -> PASS WITH WARNINGS.
+  NOT "PASS held" -- stock carried 3 structural ERRORs (see validate-agents-STOCK-main.txt).
+  Errors 3 -> 0. Warnings 1 -> 1 (same warning, untouched).
+
+Report verbatim, executive summary:
+  "**Overall Verdict**: PASS WITH WARNINGS ... **Issues**: 0 errors, 1 warning, 0 suggestions.
+   The single warning is `NO_TOOLS_SECTION` on `deployment-guide` -- implicit tool inheritance.
+   There are zero description-quality findings: the description is trigger-first, 598 chars,
+   carries explicit USE WHEN / DO NOT USE WHEN, and contains no `<example>`/`<commentary>` blocks."

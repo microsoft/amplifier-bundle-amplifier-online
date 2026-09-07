@@ -1,0 +1,27 @@
+validate-agents v1.8.0  |  run-b2597d76aa5d  |  foundation @v2.1.2 (a27d5824517d078097b60d84779dd3eae80202cd)
+repo_path: /tmp/dae2-stock-1788821234  (detached worktree @ origin/main 39823ad -- the FAIL-BEFORE baseline)
+run date: 2026-09-07
+
+VERDICT: FAIL   (quality_level == "critical")
+  agents discovered: 1 across 1 location  (candidates_scanned 1, non_agent_count 0)
+  quality: 0 good, 0 polish, 0 needs_work, 1 critical
+  structural summary: {"errors": 3, "passed": 0, "total": 1, "warnings": 1}
+
+  deployment-guide   desc 4,004 chars / 1,001 tok   example_count 6   commentary_count 6
+                     triggers ["MUST","PROACTIVELY"]   model_role ["reasoning","general"]
+                     tools_source implicit
+
+  errors (3), verbatim from structural_results:
+    DESCRIPTION_EXCESSIVE   "Description is 4004 chars (>1200, 2x the 600-char cap)"
+    COMMENTARY_TAG_PRESENT  "Description contains 6 <commentary> tag(s) -- <commentary> tags are rejected entirely"
+    EXAMPLE_BLOCK_PRESENT   "Description has 6 <example> block(s) -- example blocks are rejected entirely,
+                             not merely capped"
+
+  warnings (1):
+    NO_TOOLS_SECTION        "Agent has no explicit 'tools:' section - relying on inheritance"
+
+NOTE ON THE GATE: v1.8.0 measures the description length in CHARS -- WARN >600, ERROR >1200.
+Stock's 4,004 chars is 3.3x the ERROR line and 6.7x the 600-char cap.
+
+NOTE ON NO_TOOLS_SECTION: present in stock and unchanged by this lane. Out of contract here
+(this lane touches the frontmatter `description` value only). Recorded, not remediated.
