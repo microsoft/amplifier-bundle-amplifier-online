@@ -10,6 +10,53 @@ meta:
     `secret`s; first deploy (config->build->push->init->up); `up`/`status`/`logs` failures; GitHub
     Actions CI/CD (`cicd create`); destroy/stack switch. DO NOT USE WHEN asked for a guided,
     approval-gated walkthrough: use the deploy-project recipe.
+
+# Tool dependencies this agent's documented workflow requires.
+#
+# WHY THIS IS HERE AND NOT IN behaviors/amplifier-online.yaml
+# -----------------------------------------------------------
+# The requirement is agent-scoped, not session-scoped: it is *this agent's body*
+# that hard-codes these tools as workflow steps. Agent frontmatter is the only
+# place that expresses "this agent needs these", and it travels with the agent
+# through every include form -- `bundle.md`, the behavior partial, and
+# `recipes/deploy-project.yaml`'s self-referential dependency alike. A top-level
+# `tools:` block in the behavior would instead grant tools to the whole consuming
+# SESSION, which is broader than the need, and would still leave the dependency
+# invisible to anyone reading this file.
+#
+# WHY IT IS SAFE: this ADDS, it does not replace.
+# ----------------------------------------------
+# Agent-level `tools:` is merged with the inherited roster by module id, not
+# substituted for it -- amplifier_app_cli/lib/merge_utils.py:163-194
+# (`merge_agent_dicts`: "hooks"/"tools"/"providers" -> `merge_module_lists`) and
+# merge_utils.py:80-128 (dedupe by module id, deep-merge on collision). Wholesale
+# replacement is a *parent bundle's* `spawn.tools:` policy -- a different key,
+# untouched here (amplifier_app_cli/agent_config.py:41-51). Measured on this
+# repo: under `bundle.md` the agent's roster is 13 modules before and 13 after,
+# none lost, none duplicated; under the behavior alone it goes from 0 mounted
+# tools to 6.
+#
+# All three modules are standalone repos whose module lives at the repo ROOT, so
+# no `#subdirectory` fragment applies to any of them. Names and sources verified
+# against the current amplifier-foundation layout: `agents/shell-exec.md`
+# (tool-bash), `agents/file-ops.md` and `agents/explorer.md` (tool-filesystem,
+# tool-search), and `bundles/anchors/bundle.md`. The tool names each module
+# actually mounts are proved, not assumed, by
+# docs/lanes/ff1n-online-tools-section/verify_agent_tools.py.
+tools:
+  # bash -- `amplifier-online init` (principle 8), `status`/`logs` diagnosis
+  # (principle 6), and the deploy-project recipe's which/curl/gh/git steps.
+  - module: tool-bash
+    source: git+https://github.com/microsoft/amplifier-module-tool-bash@main
+  # read_file / edit_file / write_file -- principle 8's mandated
+  # init -> read -> edit manifest workflow, and its hard rule naming `write_file`
+  # as the prohibited path for `amplifier-online.yaml` (a prohibition on a tool
+  # the agent does not have is vacuous).
+  - module: tool-filesystem
+    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
+  # glob / grep -- principle 3 and the Scenario F repo-readiness scan.
+  - module: tool-search
+    source: git+https://github.com/microsoft/amplifier-module-tool-search@main
 ---
 
 # Deployment Guide
