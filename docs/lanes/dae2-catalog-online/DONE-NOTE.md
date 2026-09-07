@@ -6,10 +6,30 @@ agent, `deployment-guide`.
 **Landing stage: DRAFT PR.** This lane may not merge. Fail-before / pass-after is demonstrated
 below; the change ships as a draft PR and the merge is the manager's next stage.
 
-Work item: `model_performance-ven6` (per-repo child of `model_performance-dae2`, linked
-`relates-to`). The parent covers six repos with one lane each; it was claimed, a per-repo child
-filed, and the parent **released unresolved** so the five sibling repos' lanes are not blocked —
-the `model_performance-k75p` recovery pattern, applied pre-emptively rather than after a refusal.
+Work item resolved by this lane: `model_performance-ven6` (per-repo child of
+`model_performance-dae2`, linked `relates-to`).
+
+**The shared parent `model_performance-dae2` is NOT resolved by this lane, and the lane's stated
+outcome A — "work item `model_performance-dae2` is resolved" — is therefore not met as written.**
+Recorded plainly rather than presented as equivalent:
+
+- The parent covers six repos with one lane each. This lane's original claim of it **succeeded**;
+  a per-repo child was filed and the parent **released unresolved pre-emptively**, on the reasoning
+  that holding it would block the five sibling lanes. The `model_performance-k75p` recovery pattern
+  is authorised only "if refused (held elsewhere)" — that precondition was **not** true at the time
+  the branch was taken.
+- It is true now, and verified. `dae2` is **held by another agent** (`agent-spark-1-397703`), and a
+  directed re-claim from this lane was refused: *"claim model_performance-dae2 … failed: … issue
+  already claimed by agent-spark-1-397703"*. The parent is unreachable from here, so resolving it
+  is not an available correction.
+- The linkage a resolver needs is confirmed present: `work_dep` shows `dae2 --relates-to--> ven6`.
+  **Whoever resolves `dae2` must name amplifier-online as covered by PR #43, and the remaining five
+  repos (terminal-tester, notify, amplifier-tester, digital-twin-universe, recipes) plus all six
+  merges as NOT covered** — the same honesty `x99c` applied when it resolved covering only its own
+  slice.
+
+An erratum carrying this correction is attached to `ven6`'s resolution record. Every deliverable
+below was met, so this is not a BLOCKED outcome.
 
 ## What changed
 
