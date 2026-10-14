@@ -1,8 +1,26 @@
-# Amplifier Online Bundle
+# Amplifier Online Bundle (deprecated)
 
-Developer assistant for **Amplifier Online** -- deploy projects onto shared Azure Container Apps infrastructure using guided AI workflows.
+> **Deprecated: a temporary bridge from Amplifier Online v1 to v2.** Once it
+> has set up the CLI and the `amplifier-online-deploy` skill, the skill does
+> everything (including upgrading v1 projects) and the bundle offers to remove
+> itself. By hand: `amplifier bundle remove amplifier-online-behavior`,
+> `amplifier bundle remove amplifier-online`, and (if you added it with `--app`)
+> `amplifier bundle remove amplifier-bundle-amplifier-online --app`.
+> New users: install the CLI and run `amplifier-online install-skill` instead.
 
-This bundle turns Amplifier into an expert deployment guide. It does not deploy anything itself; it makes your AI assistant knowledgeable about how to use the `amplifier-online` CLI to deploy your projects onto shared Azure infrastructure.
+Makes Amplifier ready for **Amplifier Online v2**, the platform that puts a
+team's project online in Microsoft's tenant (tenant-only sign-in, keyless
+databases, deploys through Azure Pipelines).
+
+The bundle is a thin on-ramp. When Amplifier Online work comes up, its
+`/amplifier-online` mode has the assistant:
+
+1. update the `amplifier-online` CLI (an old v1 CLI upgrades to v2) and run
+   `amplifier-online install-skill`;
+2. load the **`amplifier-online-deploy`** skill, which ships with the CLI and
+   always matches its version, and follow it;
+3. if the repo is still an **AO v1 project**, offer to upgrade it (same app
+   names, URLs and sign-in), showing what changes before anything is touched.
 
 ## Installation
 
@@ -10,115 +28,28 @@ This bundle turns Amplifier into an expert deployment guide. It does not deploy 
 amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-amplifier-online@main#subdirectory=behaviors/amplifier-online.yaml" --app
 ```
 
-## Prerequisites
-
-- [Amplifier CLI](https://github.com/microsoft/amplifier) installed
-- [Amplifier Online CLI](https://github.com/microsoft/amplifier-online) installed (`uv tool install git+https://github.com/microsoft/amplifier-online#subdirectory=cli`)
-- Azure credentials configured (interactive browser or `az login`)
+You need [uv](https://docs.astral.sh/uv/) and the Azure CLI (`az login`); the
+mode installs or updates the Amplifier Online CLI itself.
 
 ## Usage
 
-Once the bundle is installed, activate the deployment assistant by entering the mode:
+Ask about deploying or upgrading a project, or enter the mode directly:
 
 ```
 /amplifier-online
 ```
 
-This loads the full deployment knowledge base into your session. From there you can ask things like:
+- "Put this project on Amplifier Online"
+- "Upgrade this project from Amplifier Online v1 to v2"
+- "Why is my deploy failing?"
 
-- "Help me deploy this project"
-- "What stack should I use for a React + FastAPI app?"
-- "Show me the manifest schema"
-- "Why is my container failing health checks?"
+## Without Amplifier
 
-### Guided Deployment Recipe
+The skill works in other agents too (Claude Code, Codex, OpenCode):
+`amplifier-online install-skill`. Upgrading by hand:
+[docs/upgrading-from-v1.md](https://github.com/microsoft/amplifier-online/blob/main/docs/upgrading-from-v1.md).
 
-For a full end-to-end deployment with approval gates at each stage:
+## v1
 
-```
-run the deploy-project recipe
-```
-
-This walks through 9 stages: project analysis, stack selection, environment setup, manifest creation, readiness checks, container build/push, deployment, verification, and optional CI/CD setup.
-
-### Direct Agent Delegation
-
-For specific questions, the `deployment-guide` agent is available via the mode. It carries detailed knowledge about:
-
-- CLI command reference
-- Stack comparison (web-app-aca, internal-service-aca, web-app-awa, static-web-app)
-- Manifest schema and examples
-- Troubleshooting playbook of named failure modes
-- CI/CD setup with GitHub Actions
-
-## What's Included
-
-```
-bundle.md                       # Root bundle entry point
-behaviors/
-  amplifier-online.yaml         # Behavior: activates agent, mode, and context
-agents/
-  deployment-guide.md           # Expert deployment agent (context sink)
-modes/
-  amplifier-online.md           # /amplifier-online mode definition
-recipes/
-  deploy-project.yaml           # 9-stage guided deployment recipe
-context/
-  amplifier-online-pointer.md   # Always-loaded orientation context
-  amplifier-online-mode-context.md  # Mode-scoped architecture + CLI reference
-  agent/                        # Heavy knowledge base (loaded by agent only)
-    cli-reference.md
-    stacks-reference.md
-    manifest-schema.md
-    project-analysis.md
-    troubleshooting-playbook.md
-    cicd-guide.md
-```
-
-## Supported Stacks
-
-| Stack | Use Case |
-|-------|----------|
-| `web-app-aca` | Multi-container apps on Azure Container Apps (backend + frontend both containerized) |
-| `internal-service-aca` | Internal-only Azure Container App -- no public ingress, JWT/managed-identity auth, optional Postgres/Cosmos/Redis/Storage |
-| `web-app-awa` | Container backend + Static Web App frontend (GitHub-integrated CI/CD, PR previews) |
-| `static-web-app` | Pure static sites with no backend |
-
----
-
-## Legal
-
-### Code of Conduct
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-
-### Trademarks
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
-
-### Privacy
-See [Microsoft Data Privacy Notice](http://go.microsoft.com/fwlink/?LinkId=518021).
-
-## Contributing
-
-> [!NOTE]
-> This project is not currently accepting external contributions, but we're actively working toward opening this up. We value community input and look forward to collaborating in the future. For now, feel free to fork and experiment!
-
-Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit [Contributor License Agreements](https://cla.opensource.microsoft.com).
-
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
-
-
-## Trademarks
-
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
-trademarks or logos is subject to and must follow
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+Version 1.x of this bundle taught AO v1 (stacks, GitHub Actions deploys); it
+is preserved at the `v1` tag.

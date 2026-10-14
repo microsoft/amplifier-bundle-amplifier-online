@@ -1,64 +1,87 @@
-# Amplifier Online — Mode Context
+# Amplifier Online — mode context
 
-This document is loaded when the `/amplifier-online` mode is active. It supplements
-the always-loaded pointer with architecture details, workflow guidance, and CLI reference.
+Amplifier Online is now **v2**. Everything about using it lives in the
+**`amplifier-online-deploy` skill**, which ships with the `amplifier-online`
+CLI and always matches its version. This mode gets the CLI and skill current,
+then hands over to the skill.
 
-## Three Layers
+## 1. Get the CLI and the skill current (once per session)
 
-| Layer | What it is |
-|-------|-----------|
-| **Amplifier Online Platform** | Shared Azure infrastructure provisioned by operators (Container Apps Environment, ACR, Postgres, Cosmos DB, Key Vault) |
-| **Amplifier Provisioner Service** | Backend API that runs as a Container App and handles stack provisioning and deployment |
-| **Amplifier Online CLI** | `amplifier-online` command-line tool used by developers to deploy their projects |
-
-## Getting Started: Guided Deployment
-
-**New to Amplifier Online?** Start with the guided deployment recipe:
-
-```
-"Help me deploy my app to Amplifier Online"
-"Walk me through deploying this project"
+```bash
+amplifier-online update || uv tool install --force "git+https://github.com/microsoft/amplifier-online#subdirectory=cli"
+amplifier-online install-skill
 ```
 
-The **deploy-project recipe** provides end-to-end guidance with approval gates at critical decision points:
-1. **Project analysis** — Scans your code and recommends the right stack
-2. **Stack selection** — Explains options and lets you choose
-3. **Environment setup** — Verifies CLI, config, and Azure authentication
-4. **Manifest creation** — Generates or validates `amplifier-online.yaml`
-5. **Repo preparation** — Checks Dockerfiles, image format, health endpoints
-6. **Build & push** — Guides container image builds (if applicable)
-7. **Deployment** — Runs `amplifier-online up` with preview first
-8. **Verification** — Tests health and troubleshoots if needed
-9. **CI/CD setup** — Optional GitHub Actions workflow generation
+- `amplifier-online update` upgrades an existing install; an old v1 CLI
+  upgrades straight to v2. If the CLI is missing or `update` fails, the `uv`
+  command installs it (needs [uv](https://docs.astral.sh/uv/)).
+- The first v2 command moves a v1 config to v2 and says so; that's expected.
+- `install-skill` copies the skill into `~/.amplifier/skills` (and other
+  agents' skill folders).
 
-**For specific questions**, ask directly:
-- "Which stack should I use for my app?" → Project analysis + stack recommendation
-- "Is my repo ready to deploy?" → Repo readiness checklist
-- "How do I fix deployment error X?" → Troubleshooting with playbook
-- "Set up CI/CD for automatic deployments" → GitHub Actions workflow generation
-
-## CLI Quick Reference
+Then load it and follow it for everything that follows:
 
 ```
-amplifier-online config          # Set global config (~/.amplifier-online/config.yaml)
-amplifier-online stack list      # List available deployment stacks
-amplifier-online stack manifest  # Show default manifest template for a stack
-amplifier-online init            # Scaffold amplifier-online.yaml from a stack template (--name, --stack)
-amplifier-online up              # Deploy (add --dry-run to preview)
-amplifier-online status          # Show deployed container apps and resources
-amplifier-online logs            # Tail container logs (--since, --container)
-amplifier-online secret set      # Store a Key Vault-backed secret value (also: secret list, secret delete)
-amplifier-online destroy         # Tear down project resources (add --dry-run to preview)
-amplifier-online cicd create     # Generate GitHub Actions workflows
+load_skill(skill_name="amplifier-online-deploy")
 ```
 
-## Delegation Reminder
+If `load_skill` doesn't find it (a skill installed mid-session may not be
+listed yet), read `~/.amplifier/skills/amplifier-online-deploy/SKILL.md`
+directly, and its `references/` files as it points to them.
 
-**REQUIRED — not optional.** When the user asks anything about Amplifier Online —
-deploying an app, stack selection, repo readiness, manifest creation or editing,
-troubleshooting, or CI/CD setup — you MUST delegate to the `deployment-guide`
-agent. Do not attempt these tasks yourself.
+## This bundle is deprecated: tell the user once
 
-The `deployment-guide` agent carries the full domain knowledge and handles all
-workflow scenarios: orientation, stack selection, first deployment,
-troubleshooting, CI/CD setup, repo readiness checks, and project analysis.
+This bundle only bridges users from AO v1 to v2. Once the skill is installed
+it adds nothing: the skill handles Amplifier Online from then on, including
+upgrading other v1 projects. So, **once per session**, after the CLI and skill
+are set up (or straight away if `~/.amplifier/skills/amplifier-online-deploy`
+already existed when the mode started), and without interrupting the task at
+hand, tell the user:
+
+> The Amplifier Online bundle was a temporary bridge to AO v2 and is now
+> deprecated: your CLI and its skill are set up, and the skill handles
+> Amplifier Online (including upgrading other v1 projects) from here. Want me
+> to remove the bundle?
+
+Only on a yes:
+
+1. `amplifier bundle current`: if the active bundle is `amplifier-online`,
+   ask which bundle to switch to (`amplifier bundle use <name>`) first.
+2. Remove it under each name it can be registered with (one that isn't
+   registered just reports "not found"):
+   ```bash
+   amplifier bundle remove amplifier-online-behavior
+   amplifier bundle remove amplifier-online
+   amplifier bundle remove amplifier-bundle-amplifier-online --app
+   ```
+   The names come from this bundle's own `bundle.name` fields; `--app`
+   matches any app registration whose URI contains the repo name.
+3. Tell the user it takes effect in their next session.
+
+Don't repeat the offer in the same session.
+
+## 2. Is this a v1 project?
+
+A repo is still on **AO v1** if its `amplifier-online.yaml` has a `stack:`
+key, or it has `.github/workflows/<project>-*-build-deploy.yaml` (or an Azure
+Static Web Apps) workflow that deploys to Amplifier Online.
+
+If so, tell the user plainly, before doing anything else:
+
+> This project is still on Amplifier Online v1. v1 keeps running it for now,
+> but v2 replaces it: same app names, URLs and sign-in, deploys through Azure
+> Pipelines, and usually small Dockerfile changes. Want me to upgrade it?
+> I'll show you what changes before anything is touched.
+
+On a yes, follow the skill's `references/adoption.md` (upgrade on a branch,
+`manifest migrate`, Dockerfiles, `up --adopt --dry-run`, then adopt and
+deploy), asking before `up --adopt` as the skill says. On a no, help with
+what they asked; a v1 project can't be changed with the v2 CLI until it is
+upgraded (the provisioner answers `PROJECT_MANAGED_BY_V1`).
+
+## 3. Otherwise
+
+Follow the skill: analyze the repo, write the manifest, `up`, `deploy`,
+verify. For the user's background, the human guide is
+https://github.com/microsoft/amplifier-online/blob/main/docs/upgrading-from-v1.md
+(for upgrades) and https://github.com/microsoft/amplifier-online (in general).

@@ -1,11 +1,7 @@
 bundle:
   name: amplifier-online-behavior
-  version: 1.0.0
-  description: Adds Amplifier Online deployment assistance — stacks, manifests, CLI guidance, troubleshooting, and CI/CD
-
-agents:
-  include:
-    - amplifier-online:deployment-guide
+  version: 2.0.0
+  description: DEPRECATED bridge to Amplifier Online v2 — sets up the CLI and its deploy skill, offers to upgrade v1 projects, then to remove itself
 
 modes:
   include:
