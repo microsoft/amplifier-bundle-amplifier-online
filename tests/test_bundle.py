@@ -70,3 +70,11 @@ def test_it_offers_to_remove_itself_by_its_registered_names():
         assert f"amplifier bundle remove {name}\n" in text
     assert "amplifier bundle remove amplifier-bundle-amplifier-online --app" in text
     assert "once per session" in text.lower() and "Only on a yes" in text
+
+
+def test_setup_reinstalls_a_cli_pinned_to_v1_from_main():
+    """`update` keeps a pinned install on its branch; a v1 CLI has no install-skill."""
+    mode = _frontmatter(ROOT / "modes" / "amplifier-online.md")["mode"]
+    text = "".join(_local(ref).read_text() for ref in mode["contributes"]["context"])
+    assert 'grep -q install-skill || uv tool install --force "git+https://github.com/microsoft/amplifier-online#subdirectory=cli"' in text
+    assert "never `@v1` or `@v2`" in text

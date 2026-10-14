@@ -7,14 +7,22 @@ then hands over to the skill.
 
 ## 1. Get the CLI and the skill current (once per session)
 
+These are routine; run them (no need to ask first) and tell the user what
+changed:
+
 ```bash
-amplifier-online update || uv tool install --force "git+https://github.com/microsoft/amplifier-online#subdirectory=cli"
+amplifier-online update
+amplifier-online --help | grep -q install-skill || uv tool install --force "git+https://github.com/microsoft/amplifier-online#subdirectory=cli"
 amplifier-online install-skill
 ```
 
-- `amplifier-online update` upgrades an existing install; an old v1 CLI
-  upgrades straight to v2. If the CLI is missing or `update` fails, the `uv`
-  command installs it (needs [uv](https://docs.astral.sh/uv/)).
+- `update` upgrades an install made from `main`; an old v1 CLI installed that
+  way comes out as v2. A CLI that was pinned to a branch (e.g. `@v1`) stays
+  where it is, and a v1 CLI has no `install-skill` command: then the second
+  line reinstalls it from `main`. Always install from `main` with no
+  `@<branch>`; never `@v1` or `@v2`. If `amplifier-online` isn't installed at
+  all, the second line installs it (needs [uv](https://docs.astral.sh/uv/)).
+- `install-bundle` is the old v1 command; don't use it.
 - The first v2 command moves a v1 config to v2 and says so; that's expected.
 - `install-skill` copies the skill into `~/.amplifier/skills` (and other
   agents' skill folders).
