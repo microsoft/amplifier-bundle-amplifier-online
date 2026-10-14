@@ -1,8 +1,8 @@
 ---
 bundle:
   name: amplifier-online
-  version: 1.0.0
-  description: Developer assistant for Amplifier Online — deploy projects onto shared Azure Container Apps infrastructure
+  version: 2.0.0
+  description: DEPRECATED bridge to Amplifier Online v2 — sets up the CLI and its deploy skill, offers to upgrade v1 projects, then to remove itself
 
 includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
