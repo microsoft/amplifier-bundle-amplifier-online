@@ -40,13 +40,23 @@ def test_behavior_references_resolve():
     assert "agents" not in behavior  # the v1 deployment-guide agent is gone
 
 
-def test_mode_context_resolves_and_loads_the_skill():
-    mode = _frontmatter(ROOT / "modes" / "amplifier-online.md")["mode"]
+MODE = ROOT / "modes" / "amplifier-online.md"
+
+
+def _mode_body() -> str:
+    """What the model sees when the mode activates. A mode's `contributes:
+    context:` files are only named, not loaded (found in a DTU run), so the
+    instructions must be in the body."""
+    return MODE.read_text().split("---\n", 2)[2]
+
+
+def test_mode_body_carries_the_instructions_and_loads_the_skill():
+    mode = _frontmatter(MODE)["mode"]
     assert "load_skill" in mode["tools"]["safe"]
-    for ref in mode["contributes"]["context"]:
-        text = _local(ref).read_text()
-        assert 'load_skill(skill_name="amplifier-online-deploy")' in text
-        assert "amplifier-online install-skill" in text
+    assert "contributes" not in mode
+    text = _mode_body()
+    assert 'load_skill(skill_name="amplifier-online-deploy")' in text
+    assert "amplifier-online install-skill" in text
 
 
 def test_nothing_points_at_removed_v1_files():
@@ -62,11 +72,17 @@ def test_nothing_points_at_removed_v1_files():
 def test_it_offers_to_remove_itself_by_its_registered_names():
     """`bundle add` registers this bundle under its own bundle.name; `remove
     --app` matches app URIs by substring. No install URI is guessed."""
-    mode = _frontmatter(ROOT / "modes" / "amplifier-online.md")["mode"]
-    text = "".join(_local(ref).read_text() for ref in mode["contributes"]["context"])
+    text = _mode_body()
     behavior = yaml.safe_load((ROOT / "behaviors" / "amplifier-online.yaml").read_text())["bundle"]["name"]
     root = _frontmatter(ROOT / "bundle.md")["bundle"]["name"]
     for name in (behavior, root):
         assert f"amplifier bundle remove {name}\n" in text
     assert "amplifier bundle remove amplifier-bundle-amplifier-online --app" in text
     assert "once per session" in text.lower() and "Only on a yes" in text
+
+
+def test_setup_reinstalls_a_cli_pinned_to_v1_from_main():
+    """`update` keeps a pinned install on its branch; a v1 CLI has no install-skill."""
+    text = _mode_body()
+    assert 'grep -q install-skill || uv tool install --force "git+https://github.com/microsoft/amplifier-online#subdirectory=cli"' in text
+    assert "never `@v1` or `@v2`" in text
